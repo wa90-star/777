@@ -5,17 +5,21 @@ const path = require("path");
 const port = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
-  const filePath = path.join(__dirname, "öffentlich", "index.html");
+  const filePath = path.join(__dirname, "public", "index.html");
 
   fs.readFile(filePath, (err, data) => {
     if (err) {
       console.error(err);
-      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(500, {
+        "Content-Type": "text/plain; charset=utf-8"
+      });
       res.end("Fehler beim Laden");
       return;
     }
 
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8"
+    });
     res.end(data);
   });
 });
