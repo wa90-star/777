@@ -2,12 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>777</title>
 
   <style>
@@ -19,195 +14,37 @@
 
     body {
       min-height: 100vh;
-      background: #080808;
+      font-family: Arial, sans-serif;
+      background: #070707;
       color: #ffffff;
-      font-family: Arial, Helvetica, sans-serif;
-    }
-
-    .app {
-      min-height: 100vh;
       display: flex;
-      flex-direction: column;
-    }
-
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 22px 20px;
-      border-bottom: 1px solid #242424;
-    }
-
-    .logo {
-      font-size: 30px;
-      font-weight: 800;
-      letter-spacing: 3px;
-    }
-
-    .status {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      color: #9b9b9b;
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #35d06f;
-      box-shadow: 0 0 10px rgba(53, 208, 111, 0.7);
-    }
-
-    main {
-      flex: 1;
-      display: flex;
-      align-items: center;
       justify-content: center;
-      padding: 30px 20px;
-    }
-
-    .hero {
-      width: 100%;
-      max-width: 520px;
+      align-items: center;
       text-align: center;
     }
 
-    .number {
-      font-size: clamp(90px, 30vw, 170px);
-      line-height: 0.9;
-      font-weight: 900;
-      letter-spacing: -8px;
+    .container {
+      width: 90%;
+      max-width: 600px;
     }
 
-    .subtitle {
-      margin-top: 24px;
-      color: #9a9a9a;
-      font-size: 16px;
-      line-height: 1.6;
+    h1 {
+      font-size: clamp(70px, 20vw, 150px);
+      letter-spacing: 8px;
+      margin-bottom: 20px;
     }
 
-    .card {
-      margin-top: 38px;
-      padding: 22px;
-      background: #111111;
-      border: 1px solid #262626;
-      border-radius: 18px;
-      text-align: left;
-    }
-
-    .card-label {
-      color: #777777;
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-    }
-
-    .card-title {
-      margin-top: 10px;
+    p {
       font-size: 20px;
-      font-weight: 700;
-    }
-
-    .card-text {
-      margin-top: 8px;
-      color: #999999;
-      font-size: 14px;
-      line-height: 1.5;
-    }
-
-    .button {
-      display: block;
-      width: 100%;
-      margin-top: 18px;
-      padding: 15px;
-      border: 0;
-      border-radius: 12px;
-      background: #ffffff;
-      color: #000000;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    .button:active {
-      transform: scale(0.98);
-    }
-
-    footer {
-      padding: 20px;
-      text-align: center;
-      color: #555555;
-      font-size: 12px;
+      opacity: 0.75;
     }
   </style>
 </head>
 
 <body>
-
-  <div class="app">
-
-    <header>
-      <div class="logo">777</div>
-
-      <div class="status">
-        <span class="status-dot"></span>
-        ONLINE
-      </div>
-    </header>
-
-    <main>
-
-      <section class="hero">
-
-        <div class="number">777</div>
-
-        <p class="subtitle">
-          Willkommen bei 777.
-          <br>
-          Die Plattform ist online.
-        </p>
-
-        <div class="card">
-
-          <div class="card-label">
-            System
-          </div>
-
-          <div class="card-title">
-            777 ist bereit
-          </div>
-
-          <p class="card-text">
-            Die Verbindung zwischen GitHub und Railway
-            funktioniert erfolgreich.
-          </p>
-
-          <button
-            class="button"
-            onclick="start777()"
-          >
-            777 starten
-          </button>
-
-        </div>
-
-      </section>
-
-    </main>
-
-    <footer>
-      777
-    </footer>
-
-  </div>
-
-  <script>
-    function start777() {
-      alert("777 läuft erfolgreich.");
-    }
-  </script>
-
+  <main class="container">
+    <h1>777</h1>
+    <p>Welcome</p>
+  </main>
 </body>
 </html>
