@@ -1,50 +1,83 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>777</title>
-
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      min-height: 100vh;
-      font-family: Arial, sans-serif;
-      background: #070707;
-      color: #ffffff;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      text-align: center;
-    }
-
-    .container {
-      width: 90%;
-      max-width: 600px;
-    }
-
-    h1 {
-      font-size: clamp(70px, 20vw, 150px);
-      letter-spacing: 8px;
-      margin-bottom: 20px;
-    }
-
-    p {
-      font-size: 20px;
-      opacity: 0.75;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>777</title>
+<style>
+*{box-sizing:border-box}
+body{
+margin:0;
+background:#070707;
+color:white;
+font-family:Arial,sans-serif;
+padding:25px 18px
+}
+main{max-width:650px;margin:auto}
+h1{
+font-size:64px;
+text-align:center;
+letter-spacing:8px;
+margin:25px 0 5px
+}
+.subtitle{
+text-align:center;
+color:#aaa;
+margin-bottom:30px
+}
+.status,.card{
+background:#111;
+border:1px solid #333;
+border-radius:12px;
+padding:16px;
+margin-bottom:14px
+}
+.dot{
+display:inline-block;
+width:10px;
+height:10px;
+background:#35d07f;
+border-radius:50%;
+margin-right:8px
+}
+h2{font-size:18px;margin:0 0 8px}
+p{color:#aaa;line-height:1.5}
+.tag{font-size:12px;color:#35d07f}
+</style>
 </head>
-
 <body>
-  <main class="container">
-    <h1>777</h1>
-    <p>Welcome</p>
-  </main>
+<main>
+<h1>777</h1>
+<p class="subtitle">Market Intelligence</p>
+
+<div class="status">
+<span class="dot"></span>System online
+</div>
+
+<div class="card">
+<h2>Market Signals</h2>
+<p>Unusual price and volume activity.</p>
+<span class="tag">MONITORING</span>
+</div>
+
+<div class="card">
+<h2>Political Signals</h2>
+<p>Public statements and market-moving political events.</p>
+<span class="tag">MONITORING</span>
+</div>
+
+<div class="card">
+<h2>Corporate Events</h2>
+<p>Earnings, filings and company announcements.</p>
+<span class="tag">MONITORING</span>
+</div>
+
+<div class="card">
+<h2>Global Market Timing</h2>
+<p>International trading sessions and reaction timing.</p>
+<span class="tag">MONITORING</span>
+</div>
+
+</main>
 </body>
 </html>
