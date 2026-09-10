@@ -57,6 +57,15 @@ function pick(snapshot, camel, snake) {
   return snapshot?.[camel] || snapshot?.[snake] || null;
 }
 
+function safeTime(value) {
+  const t = new Date(value).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function opposite(direction) {
+  return direction === "LONG" ? "SHORT" : direction === "SHORT" ? "LONG" : "KEIN SIGNAL";
+}
+
 function marketWindowOpen() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -79,7 +88,8 @@ function createMarketEngine({
   onAlert,
   onSignalAlert,
   onCoreScan,
-  getCatalystState = () => ({ items: [] })
+  getCatalystState = () => ({ items: [] }),
+  recentSignalAlert = () => null
 }) {
   const alpacaKey = process.env.APCA_API_KEY_ID;
   const alpacaSecret = process.env.APCA_API_SECRET_KEY;
@@ -116,7 +126,7 @@ function createMarketEngine({
         headers: {
           "APCA-API-KEY-ID": alpacaKey,
           "APCA-API-SECRET-KEY": alpacaSecret,
-          "User-Agent": "777-signal-radar/4.1"
+          "User-Agent": "777-signal-radar/4.3"
         },
         signal: t.signal
       });
@@ -197,9 +207,19 @@ function createMarketEngine({
   function primeSignals(signals) {
     const now = Date.now();
     for (const signal of signals) {
-      if (signal.priority === "HIGH" && signal.direction !== "KEIN SIGNAL") {
-        alertState.set(signalKey(signal), { sentAt: now, score: signal.score, correlationCount: 1, startupBaseline: true });
-      }
+      if (signal.priority !== "HIGH" || signal.direction === "KEIN SIGNAL") continue;
+      const durable = recentSignalAlert(signal.symbol, signal.direction, ALERT_COOLDOWN_MS);
+      alertState.set(signalKey(signal), durable ? {
+        sentAt: safeTime(durable.createdAt),
+        score: Number(durable.score || 0),
+        correlationCount: Number(durable.correlationCount || 1),
+        startupBaseline: false
+      } : {
+        sentAt: now,
+        score: signal.score,
+        correlationCount: 1,
+        startupBaseline: true
+      });
     }
   }
 
@@ -208,7 +228,8 @@ function createMarketEngine({
     const items = getCatalystState()?.items || [];
     return items
       .filter((item) => !item.baseline && item.detectedAt)
-      .filter((item) => Date.now() - new Date(item.detectedAt).getTime() <= CATALYST_CORRELATION_MAX_AGE_MS)
+      .filter((item) => Date.now() - safeTime(item.detectedAt) <= CATALYST_CORRELATION_MAX_AGE_MS)
+      .filter((item) => item.directionalBiases?.[signal.symbol] === signal.direction)
       .filter((item) => {
         const hits = (item.keywordHits || []).map((x) => String(x).toLowerCase());
         const text = `${item.title || ""} ${item.text || ""}`.toLowerCase();
@@ -219,30 +240,64 @@ function createMarketEngine({
 
   function directionalOptionFor(signal) {
     const snapshot = optionsBySymbol.get(signal.symbol);
-    if (!snapshot?.time || Date.now() - new Date(snapshot.time).getTime() > 90 * 60 * 1000) return null;
+    if (!snapshot?.time || Date.now() - safeTime(snapshot.time) > 90 * 60 * 1000) return null;
     const wanted = signal.direction === "LONG" ? "CALL" : "PUT";
     return (snapshot.top || [])
       .filter((x) => x.side === wanted && x.notional >= 1000000)
       .sort((a, b) => b.notional - a.notional)[0] || null;
   }
 
-  function extremeContext() {
+  function directionalContextFor(signal) {
     if (!state.lastContextScanAt) return null;
-    if (Date.now() - new Date(state.lastContextScanAt).getTime() > CONTEXT_CORRELATION_MAX_AGE_MS) return null;
-    return state.context
-      .filter((x) => x.priority === "HIGH" && x.score >= 85 && x.direction !== "KEIN SIGNAL")
-      .sort((a, b) => b.score - a.score)[0] || null;
+    if (Date.now() - safeTime(state.lastContextScanAt) > CONTEXT_CORRELATION_MAX_AGE_MS) return null;
+
+    const rules = {
+      GLD: [
+        { symbol: "UUP", relation: "inverse" },
+        { symbol: "TLT", relation: "same" }
+      ],
+      SLV: [
+        { symbol: "UUP", relation: "inverse" },
+        { symbol: "TLT", relation: "same" }
+      ]
+    };
+
+    const allowed = rules[signal.symbol] || [];
+    const matches = [];
+    for (const rule of allowed) {
+      const context = state.context.find((x) => x.symbol === rule.symbol);
+      if (!context || context.priority !== "HIGH" || context.score < 85 || context.direction === "KEIN SIGNAL") continue;
+      const impliedCommodityDirection = rule.relation === "inverse" ? opposite(context.direction) : context.direction;
+      if (impliedCommodityDirection !== signal.direction) continue;
+      matches.push({ ...context, relation: rule.relation, impliedCommodityDirection });
+    }
+    return matches.sort((a, b) => b.score - a.score)[0] || null;
   }
 
   function correlationFor(signal) {
     const confirmations = [{ type: "price", label: "Rohstoffbewegung", weight: 1 }];
     const catalyst = recentCatalystFor(signal);
     const option = directionalOptionFor(signal);
-    const context = extremeContext();
+    const context = directionalContextFor(signal);
 
-    if (catalyst) confirmations.push({ type: "catalyst", label: `${catalyst.source}`, weight: 1, detail: catalyst.title });
-    if (option) confirmations.push({ type: "options", label: `${option.side} ~$${Math.round(option.notional).toLocaleString("en-US")}`, weight: 1, detail: option.contract });
-    if (context) confirmations.push({ type: "context", label: `Extremkontext ${context.symbol} ${context.direction}`, weight: 1, detail: `${context.percentChange}% · Score ${context.score}` });
+    if (catalyst) confirmations.push({
+      type: "catalyst",
+      label: `${catalyst.source} · ${signal.direction}`,
+      weight: 1,
+      detail: catalyst.title
+    });
+    if (option) confirmations.push({
+      type: "options",
+      label: `${option.side} ~$${Math.round(option.notional).toLocaleString("en-US")}`,
+      weight: 1,
+      detail: option.contract
+    });
+    if (context) confirmations.push({
+      type: "context",
+      label: `${context.symbol} ${context.direction} · ${context.relation === "inverse" ? "inverse" : "gleichgerichtet"}`,
+      weight: 1,
+      detail: `${context.percentChange}% · Score ${context.score}`
+    });
 
     const count = confirmations.reduce((sum, x) => sum + x.weight, 0);
     return {
@@ -251,15 +306,41 @@ function createMarketEngine({
       qualified: count >= CORRELATION_REQUIRED,
       labels: confirmations.map((x) => x.label),
       confirmations,
-      catalyst: catalyst ? { source: catalyst.source, title: catalyst.title, score: catalyst.score } : null,
+      catalyst: catalyst ? {
+        source: catalyst.source,
+        title: catalyst.title,
+        score: catalyst.score,
+        direction: catalyst.directionalBiases?.[signal.symbol] || null
+      } : null,
       option: option || null,
-      context: context ? { symbol: context.symbol, direction: context.direction, score: context.score } : null
+      context: context ? {
+        symbol: context.symbol,
+        direction: context.direction,
+        score: context.score,
+        relation: context.relation
+      } : null
     };
+  }
+
+  function priorAlertFor(signal) {
+    const memory = alertState.get(signalKey(signal));
+    const durableEntry = recentSignalAlert(signal.symbol, signal.direction, ALERT_COOLDOWN_MS);
+    const durable = durableEntry ? {
+      sentAt: safeTime(durableEntry.createdAt),
+      score: Number(durableEntry.score || 0),
+      correlationCount: Number(durableEntry.correlationCount || 1),
+      startupBaseline: false
+    } : null;
+    if (!memory) return durable;
+    if (!durable) return memory;
+    if ((durable.correlationCount || 1) > (memory.correlationCount || 1)) return durable;
+    if ((durable.correlationCount || 1) < (memory.correlationCount || 1)) return memory;
+    return durable.sentAt > memory.sentAt ? durable : memory;
   }
 
   function shouldAlert(signal, correlation) {
     if (signal.priority !== "HIGH" || signal.direction === "KEIN SIGNAL" || !correlation.qualified) return false;
-    const prior = alertState.get(signalKey(signal));
+    const prior = priorAlertFor(signal);
     if (!prior) return true;
     if ((prior.correlationCount || 1) < correlation.count) return true;
     if (signal.score >= (prior.score || 0) + 15) return true;
@@ -288,16 +369,33 @@ function createMarketEngine({
   async function alertSignals(signals) {
     state.correlations = [];
     if (!telegramConfigured()) return;
-    const candidates = signals.filter((s) => s.priority === "HIGH" && s.direction !== "KEIN SIGNAL").sort((a, b) => b.score - a.score);
+    const candidates = signals
+      .filter((s) => s.priority === "HIGH" && s.direction !== "KEIN SIGNAL")
+      .sort((a, b) => b.score - a.score);
 
     for (const signal of candidates) {
       const correlation = correlationFor(signal);
-      signal.correlation = { count: correlation.count, required: correlation.required, qualified: correlation.qualified, labels: correlation.labels };
-      state.correlations.push({ symbol: signal.symbol, direction: signal.direction, score: signal.score, ...signal.correlation });
+      signal.correlation = {
+        count: correlation.count,
+        required: correlation.required,
+        qualified: correlation.qualified,
+        labels: correlation.labels
+      };
+      state.correlations.push({
+        symbol: signal.symbol,
+        direction: signal.direction,
+        score: signal.score,
+        ...signal.correlation
+      });
       if (!shouldAlert(signal, correlation)) continue;
       try {
         await sendMessage(marketAlertText(signal, correlation));
-        alertState.set(signalKey(signal), { sentAt: Date.now(), score: signal.score, correlationCount: correlation.count, startupBaseline: false });
+        alertState.set(signalKey(signal), {
+          sentAt: Date.now(),
+          score: signal.score,
+          correlationCount: correlation.count,
+          startupBaseline: false
+        });
         const iso = new Date().toISOString();
         onAlert?.(iso);
         onSignalAlert?.({ signal: { ...signal }, correlation });
@@ -326,13 +424,26 @@ function createMarketEngine({
         const size = num(trade.s ?? trade.size);
         const time = trade.t ?? trade.timestamp ?? null;
         const notional = price * size * 100;
-        if (!time || Date.now() - new Date(time).getTime() > 60 * 60 * 1000) continue;
+        if (!time || Date.now() - safeTime(time) > 60 * 60 * 1000) continue;
         if (notional < 500000) continue;
         const m = contract.match(/^([A-Z.]+)(\d{6})([CP])(\d{8})$/);
-        candidates.push({ contract, side: m?.[3] === "C" ? "CALL" : m?.[3] === "P" ? "PUT" : "OPTION", strike: m ? Number(m[4]) / 1000 : null, price: round(price, 2), size, notional: Math.round(notional), time });
+        candidates.push({
+          contract,
+          side: m?.[3] === "C" ? "CALL" : m?.[3] === "P" ? "PUT" : "OPTION",
+          strike: m ? Number(m[4]) / 1000 : null,
+          price: round(price, 2),
+          size,
+          notional: Math.round(notional),
+          time
+        });
       }
       candidates.sort((a, b) => b.notional - a.notional);
-      const snapshot = { symbol, mode: "INDICATIVE / DELAYED", top: candidates.slice(0, 5), time: new Date().toISOString() };
+      const snapshot = {
+        symbol,
+        mode: "INDICATIVE / DELAYED",
+        top: candidates.slice(0, 5),
+        time: new Date().toISOString()
+      };
       optionsBySymbol.set(symbol, snapshot);
       state.options = snapshot;
       state.lastOptionsScanAt = snapshot.time;
@@ -346,7 +457,10 @@ function createMarketEngine({
   async function runGroup(config, kind) {
     const symbols = Object.keys(config);
     const snapshots = await fetchSnapshots(symbols);
-    return symbols.filter((symbol) => snapshots?.[symbol]).map((symbol) => analyze(symbol, snapshots[symbol], config[symbol], kind)).sort((a, b) => b.score - a.score);
+    return symbols
+      .filter((symbol) => snapshots?.[symbol])
+      .map((symbol) => analyze(symbol, snapshots[symbol], config[symbol], kind))
+      .sort((a, b) => b.score - a.score);
   }
 
   async function runCore(force = false) {
@@ -357,14 +471,21 @@ function createMarketEngine({
       state.core = await runGroup(CORE, "commodity");
       state.lastCoreScanAt = new Date().toISOString();
       state.lastError = null;
+
       if (!corePrimed) {
         primeSignals(state.core);
         corePrimed = true;
         console.log("777 commodity baseline primed; startup alerts suppressed");
       }
-      const elevated = state.core.find((s) => s.priority === "HIGH" && s.direction !== "KEIN SIGNAL" && OPTION_SYMBOLS.has(s.symbol));
-      if (wasPrimed && elevated) await optionConfirmation(elevated.symbol);
-      if (wasPrimed) await alertSignals(state.core);
+
+      if (wasPrimed) {
+        const elevated = state.core
+          .filter((s) => s.priority === "HIGH" && s.direction !== "KEIN SIGNAL" && OPTION_SYMBOLS.has(s.symbol))
+          .slice(0, 3);
+        for (const signal of elevated) await optionConfirmation(signal.symbol);
+        await alertSignals(state.core);
+      }
+
       onCoreScan?.(state.core);
       console.log(`777 commodity scan complete: ${state.core.length} instruments`);
       return state.core;
@@ -407,7 +528,14 @@ function createMarketEngine({
       const prevDaily = pick(s, "prevDailyBar", "previous_daily_bar") || pick(s, "previousDailyBar", "previous_daily_bar") || {};
       const price = num(trade?.p ?? trade?.price) || num(daily.c ?? daily.close);
       const previousClose = num(prevDaily.c ?? prevDaily.close);
-      return { symbol: clean, price: round(price, price < 20 ? 3 : 2), previousClose: round(previousClose, 2), percentChange: round(pct(price, previousClose), 2), source: "Alpaca IEX", time: trade?.t ?? trade?.timestamp ?? null };
+      return {
+        symbol: clean,
+        price: round(price, price < 20 ? 3 : 2),
+        previousClose: round(previousClose, 2),
+        percentChange: round(pct(price, previousClose), 2),
+        source: "Alpaca IEX",
+        time: trade?.t ?? trade?.timestamp ?? null
+      };
     } catch (alpacaError) {
       if (!twelveKey) throw alpacaError;
       const t = timeoutSignal(8000);
@@ -415,7 +543,14 @@ function createMarketEngine({
         const response = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(clean)}&apikey=${encodeURIComponent(twelveKey)}`, { signal: t.signal });
         const data = await response.json();
         if (!response.ok || data.status === "error" || data.code) throw new Error(data.message || `Twelve Data HTTP ${response.status}`);
-        return { symbol: clean, price: num(data.close), previousClose: num(data.previous_close), percentChange: num(data.percent_change), source: "Twelve Data fallback", time: data.datetime || null };
+        return {
+          symbol: clean,
+          price: num(data.close),
+          previousClose: num(data.previous_close),
+          percentChange: num(data.percent_change),
+          source: "Twelve Data fallback",
+          time: data.datetime || null
+        };
       } finally {
         t.clear();
       }
@@ -427,7 +562,9 @@ function createMarketEngine({
     const b = setTimeout(() => runContext(), 18000);
     const coreTimer = setInterval(() => runCore(), CORE_INTERVAL_MS);
     const contextTimer = setInterval(() => runContext(), CONTEXT_INTERVAL_MS);
-    for (const timer of [a, b, coreTimer, contextTimer]) if (typeof timer.unref === "function") timer.unref();
+    for (const timer of [a, b, coreTimer, contextTimer]) {
+      if (typeof timer.unref === "function") timer.unref();
+    }
   }
 
   return {
@@ -446,6 +583,7 @@ function createMarketEngine({
       correlationRequired: CORRELATION_REQUIRED,
       catalystCorrelationMaxAgeMinutes: CATALYST_CORRELATION_MAX_AGE_MS / 60000,
       optionsMode: "indicative-confirmation-only",
+      contextConfirmationScope: "gold-silver-directional-only",
       alpacaConfigured: alpacaConfigured()
     })
   };
