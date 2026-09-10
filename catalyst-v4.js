@@ -1,3 +1,6 @@
+const fs = require("fs");
+const path = require("path");
+
 const KEYWORDS = [
   "oil", "crude", "petroleum", "natural gas", "lng", "pipeline",
   "gold", "silver", "copper", "uranium", "steel", "aluminum", "aluminium",
@@ -24,6 +27,7 @@ const POLL = {
 };
 
 const DISPLAY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const SEEN_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 
 function timeoutSignal(ms) {
   const controller = new AbortController();
@@ -63,6 +67,82 @@ function rssItems(xml) {
   }));
 }
 
+function hasAny(text, phrases) {
+  return phrases.some((phrase) => text.includes(phrase));
+}
+
+function inferDirectionalBiases(value) {
+  const text = String(value || "").toLowerCase();
+  const biases = {};
+
+  function set(symbol, longCondition, shortCondition) {
+    if (longCondition === shortCondition) return;
+    biases[symbol] = longCondition ? "LONG" : "SHORT";
+  }
+
+  const rateLong = hasAny(text, [
+    "rate cut", "cut interest rates", "lower interest rates", "lower rates",
+    "monetary easing", "easing monetary policy", "dovish", "weak dollar", "dollar weakness"
+  ]);
+  const rateShort = hasAny(text, [
+    "rate hike", "raise interest rates", "higher interest rates", "higher rates",
+    "monetary tightening", "tightening monetary policy", "hawkish", "strong dollar", "dollar strength"
+  ]);
+  const geopolitical = hasAny(text, ["war", "attack", "military strike", "missile", "invasion"]);
+  const goldMention = hasAny(text, ["gold", "precious metal"]);
+  const silverMention = text.includes("silver");
+  set("GLD", rateLong || (goldMention && geopolitical), rateShort);
+  set("SLV", rateLong || (silverMention && geopolitical), rateShort);
+
+  const energyMention = hasAny(text, ["oil", "crude", "petroleum", "opec", "refinery"]);
+  const sanctionsEnergy = text.includes("sanction") && hasAny(text, ["iran", "russia", "oil", "petroleum"]);
+  const oilLong = energyMention && (
+    hasAny(text, [
+      "production cut", "output cut", "cut production", "cut output", "supply disruption",
+      "pipeline shutdown", "pipeline disruption", "oil export ban", "block oil exports",
+      "stop iranian oil", "strategic petroleum reserve refill", "spr refill"
+    ]) || sanctionsEnergy
+  );
+  const oilShort = energyMention && hasAny(text, [
+    "production increase", "output increase", "increase production", "increase output",
+    "supply increase", "strategic petroleum reserve release", "spr release",
+    "sanctions relief", "drill baby drill", "increase drilling", "more drilling",
+    "lower oil prices", "oil prices down"
+  ]);
+  set("USO", oilLong, oilShort);
+
+  const gasMention = hasAny(text, ["natural gas", "lng", "pipeline"]);
+  const gasLong = gasMention && hasAny(text, [
+    "supply disruption", "pipeline shutdown", "pipeline disruption", "lng export increase",
+    "increase lng exports", "export ban", "sanctions"
+  ]);
+  const gasShort = gasMention && hasAny(text, [
+    "production increase", "supply increase", "pipeline restart", "lng export halt", "reduce lng exports"
+  ]);
+  set("UNG", gasLong, gasShort);
+
+  const copperMention = hasAny(text, ["copper", "mining", "mine"]);
+  const copperLong = copperMention && hasAny(text, [
+    "china stimulus", "stimulus package", "infrastructure spending", "mine strike",
+    "mine shutdown", "supply disruption", "copper export ban"
+  ]);
+  const copperShort = copperMention && hasAny(text, [
+    "china slowdown", "manufacturing slowdown", "recession", "mine restart", "copper supply increase"
+  ]);
+  set("COPX", copperLong, copperShort);
+
+  const agricultureMention = hasAny(text, ["agriculture", "grain", "wheat", "corn", "soybean", "soybeans"]);
+  const agricultureLong = agricultureMention && hasAny(text, [
+    "export ban", "drought", "crop failure", "poor harvest", "grain corridor closed", "supply disruption"
+  ]);
+  const agricultureShort = agricultureMention && hasAny(text, [
+    "record harvest", "bumper crop", "export increase", "grain corridor reopened", "supply increase"
+  ]);
+  set("DBA", agricultureLong, agricultureShort);
+
+  return biases;
+}
+
 function relevant(text) {
   const lower = String(text || "").toLowerCase();
   const hits = KEYWORDS.filter((word) => lower.includes(word));
@@ -78,7 +158,8 @@ function isRecent(item) {
 }
 
 function classify(item, baseScore) {
-  const check = relevant(`${item.title || ""} ${item.text || ""}`);
+  const combined = `${item.title || ""} ${item.text || ""}`;
+  const check = relevant(combined);
   if (!check.hits.length) return null;
   const score = Math.min(
     100,
@@ -88,13 +169,19 @@ function classify(item, baseScore) {
     ...item,
     score,
     priority: score >= 75 ? "HIGH" : score >= 60 ? "MEDIUM" : "LOW",
-    keywordHits: check.hits.slice(0, 6)
+    keywordHits: check.hits.slice(0, 6),
+    urgentKeywordHits: check.urgentHits.slice(0, 6),
+    directionalBiases: inferDirectionalBiases(combined)
   };
 }
 
 function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant }) {
   const seen = new Map();
   const primed = new Set();
+  const preferredDir = process.env.RADAR_DATA_DIR || "/data";
+  let storageFile = null;
+  let persistenceMode = "memory-only";
+
   const state = {
     items: [],
     lastScanAt: null,
@@ -106,6 +193,59 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       pelosiOfficial: { ok: null, lastScanAt: null, error: null }
     }
   };
+
+  function initStorage() {
+    for (const dir of [preferredDir, path.join("/tmp", "777-radar")]) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        const probe = path.join(dir, ".catalyst-write-test");
+        fs.writeFileSync(probe, "ok");
+        fs.unlinkSync(probe);
+        storageFile = path.join(dir, "catalyst-state.json");
+        persistenceMode = dir === preferredDir ? `persistent:${dir}` : `fallback:${dir}`;
+        return;
+      } catch (error) {
+        console.error(`777 catalyst storage unavailable ${dir}:`, error.message);
+      }
+    }
+  }
+
+  function persistState() {
+    if (!storageFile) return;
+    try {
+      const tmp = `${storageFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({
+        version: 2,
+        savedAt: new Date().toISOString(),
+        seen: [...seen.entries()],
+        primed: [...primed],
+        items: state.items.slice(0, 30)
+      }, null, 2));
+      fs.renameSync(tmp, storageFile);
+    } catch (error) {
+      console.error("777 catalyst persist error:", error.message);
+    }
+  }
+
+  function loadState() {
+    if (!storageFile || !fs.existsSync(storageFile)) return;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(storageFile, "utf8"));
+      const cutoff = Date.now() - SEEN_MAX_AGE_MS;
+      for (const pair of parsed.seen || []) {
+        if (!Array.isArray(pair) || pair.length !== 2) continue;
+        const ts = Number(pair[1]);
+        if (Number.isFinite(ts) && ts >= cutoff) seen.set(pair[0], ts);
+      }
+      for (const key of parsed.primed || []) primed.add(key);
+      state.items = (Array.isArray(parsed.items) ? parsed.items : [])
+        .filter((x) => x?.detectedAt && Date.now() - new Date(x.detectedAt).getTime() <= SEEN_MAX_AGE_MS)
+        .slice(0, 30);
+      console.log(`777 catalyst state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
+    } catch (error) {
+      console.error("777 catalyst state load error:", error.message);
+    }
+  }
 
   function markSource(name, ok, error = null) {
     state.sources[name] = {
@@ -121,7 +261,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     try {
       const response = await fetch(url, {
         headers: {
-          "User-Agent": "777-signal-radar/4.1 market-monitor",
+          "User-Agent": "777-signal-radar/4.3 market-monitor",
           Accept: "*/*",
           ...headers
         },
@@ -140,10 +280,13 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
   }
 
   function pruneSeen() {
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const cutoff = Date.now() - SEEN_MAX_AGE_MS;
     for (const [key, value] of seen.entries()) {
       if (value < cutoff) seen.delete(key);
     }
+    state.items = state.items
+      .filter((x) => x?.detectedAt && Date.now() - new Date(x.detectedAt).getTime() <= SEEN_MAX_AGE_MS)
+      .slice(0, 30);
   }
 
   async function accept(sourceKey, rawItems, baseScore) {
@@ -162,6 +305,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       for (const item of rawItems) seen.set(item.id || item.url, now);
       primed.add(sourceKey);
       if (normalized.length) state.items = [...normalized, ...state.items].slice(0, 30);
+      persistState();
       console.log(`777 catalyst source primed: ${sourceKey}, ${normalized.length} recent relevant`);
       return;
     }
@@ -172,8 +316,13 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 
     for (const item of rawItems) seen.set(item.id || item.url, now);
     if (fresh.length) state.items = [...fresh, ...state.items].slice(0, 30);
+    persistState();
 
-    const alerts = fresh.filter((item) => item.priority === "HIGH").slice(0, 2);
+    const alerts = fresh
+      .filter((item) => item.priority === "HIGH")
+      .filter((item) => Object.keys(item.directionalBiases || {}).length > 0 || (item.urgentKeywordHits || []).length > 0)
+      .slice(0, 2);
+
     if (alerts.length) {
       try {
         onFreshRelevant?.(alerts);
@@ -181,6 +330,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         console.error("777 catalyst trigger callback failed:", error.message);
       }
     }
+
     if (telegramConfigured()) {
       for (const item of alerts) {
         try {
@@ -195,12 +345,14 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 
   function formatAlert(item) {
     const title = String(item.title || item.text || "").slice(0, 700);
+    const biases = Object.entries(item.directionalBiases || {}).map(([symbol, direction]) => `${symbol} ${direction}`);
     return [
       "777 KATALYSATOR",
       "",
       item.source,
       title,
       `Score: ${item.score}/100`,
+      biases.length ? `Richtung: ${biases.join(", ")}` : "Richtung: noch offen",
       item.keywordHits?.length ? `Treffer: ${item.keywordHits.join(", ")}` : null,
       item.url || null
     ].filter(Boolean).join("\n");
@@ -330,6 +482,9 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     startTimer(scanPelosi, 42000, POLL.pelosi);
   }
 
+  initStorage();
+  loadState();
+
   return {
     start,
     scanTrump,
@@ -341,6 +496,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       ...state,
       focus: "commodity-relevant influential statements and official policy",
       displayMaxAgeDays: DISPLAY_MAX_AGE_MS / 86400000,
+      persistence: persistenceMode,
       pollingMinutes: {
         trumpTruth: POLL.trump / 60000,
         federalReserve: POLL.fed / 60000,
