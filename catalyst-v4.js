@@ -75,6 +75,13 @@ function inferDirectionalBiases(value) {
   const text = String(value || "").toLowerCase();
   const biases = {};
 
+  const contestedFraming = hasAny(text, [
+    "challenging ", "challenges ", "challenge to ", "opposes ", "opposing ",
+    "lawsuit", "sues ", "court challenge", "seeks to block", "seek to block",
+    "attempts to block", "attempt to block"
+  ]);
+  if (contestedFraming) return biases;
+
   function set(symbol, longCondition, shortCondition) {
     if (longCondition === shortCondition) return;
     biases[symbol] = longCondition ? "LONG" : "SHORT";
@@ -95,7 +102,11 @@ function inferDirectionalBiases(value) {
   set("SLV", rateLong || (silverMention && geopolitical), rateShort);
 
   const energyMention = hasAny(text, ["oil", "crude", "petroleum", "opec", "refinery"]);
-  const sanctionsEnergy = text.includes("sanction") && hasAny(text, ["iran", "russia", "oil", "petroleum"]);
+  const sanctionOpposition = hasAny(text, [
+    "oppose sanctions", "opposes sanctions", "opposing sanctions", "against sanctions",
+    "lift sanctions", "sanctions relief"
+  ]);
+  const sanctionsEnergy = text.includes("sanction") && hasAny(text, ["iran", "russia", "oil", "petroleum"]) && !sanctionOpposition;
   const oilLong = energyMention && (
     hasAny(text, [
       "production cut", "output cut", "cut production", "cut output", "supply disruption",
@@ -240,7 +251,12 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       for (const key of parsed.primed || []) primed.add(key);
       state.items = (Array.isArray(parsed.items) ? parsed.items : [])
         .filter((x) => x?.detectedAt && Date.now() - new Date(x.detectedAt).getTime() <= SEEN_MAX_AGE_MS)
+        .map((x) => ({
+          ...x,
+          directionalBiases: inferDirectionalBiases(`${x.title || ""} ${x.text || ""}`)
+        }))
         .slice(0, 30);
+      persistState();
       console.log(`777 catalyst state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
       console.error("777 catalyst state load error:", error.message);
@@ -261,7 +277,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     try {
       const response = await fetch(url, {
         headers: {
-          "User-Agent": "777-signal-radar/4.3 market-monitor",
+          "User-Agent": "777-signal-radar/4.4 market-monitor",
           Accept: "*/*",
           ...headers
         },
