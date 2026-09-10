@@ -1,7 +1,11 @@
 {
-  "name": "777",
-  "version": "1.0.0",
+  "name": "777-signal-radar-pro",
+  "version": "4.6.0",
+  "private": true,
   "scripts": {
-    "start": "node index.js"
+    "start": "node server-v4.js"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
