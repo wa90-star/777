@@ -18,6 +18,25 @@ function safeTime(value) {
   return Number.isFinite(t) ? t : 0;
 }
 
+function normalizeStringArray(value) {
+  return Array.isArray(value) ? value.map((x) => String(x)) : [];
+}
+
+function inferAlertType(raw) {
+  if (raw?.alertType) return String(raw.alertType);
+  const types = normalizeStringArray(raw?.confirmationTypes);
+  const priceOnly = types.length === 1 && types[0] === "price";
+  if (priceOnly && Number(raw?.correlationCount || 0) <= 1) return "EXTREME_OVERRIDE";
+  if (Number(raw?.correlationCount || 0) >= 2) return "CORRELATED";
+  return "LEGACY";
+}
+
+function qualityClass(entry) {
+  if (entry.alertType === "EXTREME_OVERRIDE") return "EXTREME / PRICE-ONLY";
+  if (entry.alertType === "CORRELATED") return `CORRELATED / ${Math.max(2, Number(entry.correlationCount || 0))} CONFIRMATIONS`;
+  return "LEGACY";
+}
+
 function createSignalJournal({ quote }) {
   const entries = [];
   const timers = new Map();
@@ -52,7 +71,7 @@ function createSignalJournal({ quote }) {
     if (!storageFile) return;
     try {
       const tmp = `${storageFile}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ version: 2, savedAt: new Date().toISOString(), entries }, null, 2));
+      fs.writeFileSync(tmp, JSON.stringify({ version: 3, savedAt: new Date().toISOString(), entries }, null, 2));
       fs.renameSync(tmp, storageFile);
     } catch (error) {
       log("PERSIST_ERROR", { error: error.message });
@@ -67,18 +86,30 @@ function createSignalJournal({ quote }) {
       if (!Array.isArray(loaded)) return;
       for (const raw of loaded.slice(0, MAX_ENTRIES)) {
         if (!raw?.id || !raw?.symbol || !raw?.direction || !safeTime(raw.createdAt)) continue;
-        entries.push({
+        const confirmationTypes = normalizeStringArray(raw.confirmationTypes);
+        const alertType = inferAlertType({ ...raw, confirmationTypes });
+        const entry = {
           ...raw,
           score: Number(raw.score || 0),
           entryPrice: Number(raw.entryPrice || 0),
           correlationCount: Number(raw.correlationCount || 0),
-          confirmations: Array.isArray(raw.confirmations) ? raw.confirmations : [],
+          correlationRequired: Number(raw.correlationRequired || 2),
+          correlationQualified: Boolean(raw.correlationQualified),
+          extreme: raw.extreme === true || alertType === "EXTREME_OVERRIDE",
+          extremeOverride: raw.extremeOverride === true || alertType === "EXTREME_OVERRIDE",
+          extremeReason: raw.extremeReason || null,
+          alertType,
+          confirmations: normalizeStringArray(raw.confirmations),
+          confirmationTypes,
           mfePct: Number(raw.mfePct || 0),
           maePct: Number(raw.maePct || 0),
           checks: raw.checks && typeof raw.checks === "object" ? raw.checks : {}
-        });
+        };
+        entry.qualityClass = raw.qualityClass || qualityClass(entry);
+        entries.push(entry);
       }
       entries.sort((a, b) => safeTime(b.createdAt) - safeTime(a.createdAt));
+      persist();
       log("LOADED", { count: entries.length, persistence: persistenceMode });
     } catch (error) {
       log("LOAD_ERROR", { error: error.message });
@@ -154,6 +185,9 @@ function createSignalJournal({ quote }) {
 
   function record({ signal, correlation }) {
     const createdAt = new Date().toISOString();
+    const extremeOverride = Boolean(correlation?.extremeOverride);
+    const correlationQualified = Boolean(correlation?.qualified);
+    const alertType = extremeOverride && !correlationQualified ? "EXTREME_OVERRIDE" : "CORRELATED";
     const entry = {
       id: `${signal.symbol}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       createdAt,
@@ -161,18 +195,26 @@ function createSignalJournal({ quote }) {
       name: signal.name,
       direction: signal.direction,
       entryPrice: Number(signal.price),
+      entrySource: signal.source || null,
       score: Number(signal.score || 0),
       priority: signal.priority,
       percentChangeAtAlert: Number(signal.percentChange || 0),
-      correlationCount: Number(correlation.count || 0),
-      confirmations: Array.isArray(correlation.labels) ? correlation.labels : [],
-      confirmationTypes: Array.isArray(correlation.confirmations) ? correlation.confirmations.map((x) => x.type) : [],
+      correlationCount: Number(correlation?.count || 0),
+      correlationRequired: Number(correlation?.required || 2),
+      correlationQualified,
+      extreme: Boolean(signal.extreme),
+      extremeOverride,
+      extremeReason: signal.extremeReason || null,
+      alertType,
+      confirmations: normalizeStringArray(correlation?.labels),
+      confirmationTypes: Array.isArray(correlation?.confirmations) ? correlation.confirmations.map((x) => String(x.type)) : [],
       mfePct: 0,
       maePct: 0,
       lastObservedPrice: Number(signal.price),
       lastObservedAt: createdAt,
       checks: {}
     };
+    entry.qualityClass = qualityClass(entry);
 
     entries.unshift(entry);
     if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;
@@ -257,7 +299,11 @@ function createSignalJournal({ quote }) {
     const groups = new Map();
     for (const entry of trusted) {
       const result = entry.checks["2h"].result;
-      const keys = [`symbol:${entry.symbol}`, ...((entry.confirmationTypes || []).map((x) => `confirmation:${x}`))];
+      const keys = [
+        `symbol:${entry.symbol}`,
+        `alertType:${entry.alertType || "LEGACY"}`,
+        ...((entry.confirmationTypes || []).map((x) => `confirmation:${x}`))
+      ];
       for (const key of keys) {
         if (!groups.has(key)) groups.set(key, { key, count: 0, wins: 0, losses: 0, flat: 0, moveSum: 0 });
         const g = groups.get(key);
