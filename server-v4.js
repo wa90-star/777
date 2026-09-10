@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.6 - focused commodity runtime with official EIA catalysts
+// 777 Signal Radar Pro v4.7 - focused commodity runtime with official EIA catalysts
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -120,7 +120,7 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.6",
+    version: "4.7",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -247,7 +247,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.6 running on port ${PORT}`);
+  console.log(`777 v4.7 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}`);
   market.start();
