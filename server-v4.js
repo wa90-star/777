@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.1 - commodity-first correlation runtime
+// 777 Signal Radar Pro v4.2 - commodity-first correlation runtime
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -11,6 +11,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 let lastAlertAt = null;
 let journal = null;
+let market = null;
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -51,10 +52,16 @@ function recordAlert(iso) {
 const catalysts = createCatalystEngine({
   sendMessage: sendTelegramMessage,
   telegramConfigured,
-  onAlert: recordAlert
+  onAlert: recordAlert,
+  onFreshRelevant: (items) => {
+    if (!market || !items?.length) return;
+    const timer = setTimeout(() => market.runCore(true), 0);
+    if (typeof timer.unref === "function") timer.unref();
+    console.log(`777 event-driven market check queued: ${items.length} fresh catalyst(s)`);
+  }
 });
 
-const market = createMarketEngine({
+market = createMarketEngine({
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert,
@@ -71,7 +78,7 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.1",
+    version: "4.2",
     status: "online",
     focus: "commodity-first",
     strategy: [
@@ -81,7 +88,8 @@ function statusPayload() {
       "influential-public-statements",
       "official-policy-catalysts",
       "directional-options-confirmation",
-      "automatic-30m-2h-outcome-checks"
+      "automatic-30m-2h-outcome-checks",
+      "event-driven-market-recheck-after-fresh-catalyst"
     ],
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
@@ -188,7 +196,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.1 running on port ${PORT}`);
+  console.log(`777 v4.2 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + correlation gate ${market.getState().correlationRequired}; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   market.start();
   catalysts.start();
