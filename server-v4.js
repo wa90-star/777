@@ -1,3 +1,4 @@
+// 777 Signal Radar Pro v4 - commodity-first runtime
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
