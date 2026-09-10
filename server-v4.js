@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.4 - commodity-first directional correlation runtime
+// 777 Signal Radar Pro v4.5 - focused, read-only public runtime
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -9,6 +9,7 @@ const createSignalJournal = require("./signal-journal-v4");
 const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const ALLOWED_QUOTES = new Set(["GLD", "SLV", "USO", "UNG", "COPX", "DBA", "SPY", "QQQ", "TLT", "UUP"]);
 let lastAlertAt = null;
 let journal = null;
 let market = null;
@@ -81,9 +82,10 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.4",
+    version: "4.5",
     status: "online",
     focus: "commodity-first",
+    publicApiMode: "read-only",
     strategy: [
       "commodity-price-anomalies",
       "correlation-gate-2-independent-confirmations",
@@ -94,7 +96,8 @@ function statusPayload() {
       "official-policy-catalysts",
       "directional-options-confirmation",
       "persistent-30m-2h-outcome-journal",
-      "event-driven-market-recheck-inside-market-window"
+      "event-driven-market-recheck-inside-market-window",
+      "public-api-read-only-to-protect-data-budget"
     ],
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
@@ -102,6 +105,7 @@ function statusPayload() {
     marketWindowOpen: marketState.marketWindowOpen,
     coreSymbols: marketState.coreSymbols,
     contextSymbols: marketState.contextSymbols,
+    allowedQuoteSymbols: [...ALLOWED_QUOTES],
     coreIntervalMinutes: marketState.coreIntervalMinutes,
     contextIntervalMinutes: marketState.contextIntervalMinutes,
     correlationRequired: marketState.correlationRequired,
@@ -145,7 +149,6 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/status") return sendJson(res, 200, statusPayload());
 
     if (requestUrl.pathname === "/api/scan" || requestUrl.pathname === "/api/core") {
-      if (requestUrl.searchParams.get("refresh") === "1") await market.runCore(true);
       const state = market.getState();
       return sendJson(res, 200, {
         system: "777",
@@ -160,7 +163,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (requestUrl.pathname === "/api/context") {
-      if (requestUrl.searchParams.get("refresh") === "1") await market.runContext(true);
       const state = market.getState();
       return sendJson(res, 200, {
         system: "777",
@@ -177,21 +179,14 @@ const server = http.createServer(async (req, res) => {
 
     if (requestUrl.pathname === "/api/options") {
       const cached = market.getState().options;
-      const requested = requestUrl.searchParams.get("symbol");
-      const refresh = requestUrl.searchParams.get("refresh") === "1";
-      if (!requested || !refresh) {
-        return sendJson(res, 200, cached || { mode: "INDICATIVE / DELAYED", top: [], time: null });
-      }
-      const symbol = requested.trim().toUpperCase();
-      if (!["GLD", "SLV", "USO"].includes(symbol)) {
-        return sendJson(res, 400, { error: "Options confirmation is limited to GLD, SLV and USO" });
-      }
-      const result = await market.optionConfirmation(symbol);
-      return sendJson(res, 200, result || { symbol, mode: "INDICATIVE / DELAYED", top: [], time: new Date().toISOString() });
+      return sendJson(res, 200, cached || { mode: "INDICATIVE / DELAYED", top: [], time: null });
     }
 
     if (requestUrl.pathname === "/api/quote") {
       const symbol = (requestUrl.searchParams.get("symbol") || "GLD").trim().toUpperCase();
+      if (!ALLOWED_QUOTES.has(symbol)) {
+        return sendJson(res, 400, { error: "Symbol outside focused radar scope", allowed: [...ALLOWED_QUOTES] });
+      }
       try {
         return sendJson(res, 200, { system: "777", data: await market.quote(symbol), time: new Date().toISOString() });
       } catch (error) {
@@ -208,9 +203,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.4 running on port ${PORT}`);
+  console.log(`777 v4.5 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
-  console.log(`777 persistence: journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}`);
+  console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}`);
   market.start();
   catalysts.start();
 });
