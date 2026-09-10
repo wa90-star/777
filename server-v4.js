@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.3 - commodity-first directional correlation runtime
+// 777 Signal Radar Pro v4.4 - commodity-first directional correlation runtime
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -81,12 +81,13 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.3",
+    version: "4.4",
     status: "online",
     focus: "commodity-first",
     strategy: [
       "commodity-price-anomalies",
       "correlation-gate-2-independent-confirmations",
+      "extreme-commodity-override-for-gld-slv-uso-ung",
       "direction-consistent-catalyst-confirmation",
       "restricted-directional-cross-market-confirmation",
       "influential-public-statements",
@@ -106,6 +107,9 @@ function statusPayload() {
     correlationRequired: marketState.correlationRequired,
     catalystCorrelationMaxAgeMinutes: marketState.catalystCorrelationMaxAgeMinutes,
     contextConfirmationScope: marketState.contextConfirmationScope,
+    extremeOverrideSymbols: marketState.extremeOverrideSymbols,
+    extremeDayMultiplier: marketState.extremeDayMultiplier,
+    extremeVelocityMultiplier: marketState.extremeVelocityMultiplier,
     optionsMode: marketState.optionsMode,
     lastCoreScanAt: marketState.lastCoreScanAt,
     lastContextScanAt: marketState.lastContextScanAt,
@@ -204,8 +208,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.3 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired}; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 v4.4 running on port ${PORT}`);
+  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 persistence: journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}`);
   market.start();
   catalysts.start();
