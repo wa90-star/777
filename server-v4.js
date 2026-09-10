@@ -146,9 +146,10 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, catalysts.getState());
 
     if (requestUrl.pathname === "/api/options") {
+      const cached = market.getState().options;
       const requested = requestUrl.searchParams.get("symbol");
-      if (!requested) {
-        const cached = market.getState().options;
+      const refresh = requestUrl.searchParams.get("refresh") === "1";
+      if (!requested || !refresh) {
         return sendJson(res, 200, cached || {
           mode: "INDICATIVE / DELAYED",
           top: [],
