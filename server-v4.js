@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.2 - commodity-first correlation runtime
+// 777 Signal Radar Pro v4.3 - commodity-first directional correlation runtime
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -66,6 +66,7 @@ market = createMarketEngine({
   telegramConfigured,
   onAlert: recordAlert,
   getCatalystState: () => catalysts.getState(),
+  recentSignalAlert: (symbol, direction, maxAgeMs) => journal?.recentAlertFor(symbol, direction, maxAgeMs) || null,
   onSignalAlert: (entry) => journal?.record(entry),
   onCoreScan: (signals) => journal?.observe(signals)
 });
@@ -78,17 +79,18 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.2",
+    version: "4.3",
     status: "online",
     focus: "commodity-first",
     strategy: [
       "commodity-price-anomalies",
       "correlation-gate-2-independent-confirmations",
-      "extreme-cross-market-context",
+      "direction-consistent-catalyst-confirmation",
+      "restricted-directional-cross-market-confirmation",
       "influential-public-statements",
       "official-policy-catalysts",
       "directional-options-confirmation",
-      "automatic-30m-2h-outcome-checks",
+      "persistent-30m-2h-outcome-journal",
       "event-driven-market-recheck-after-fresh-catalyst"
     ],
     telegramConfigured: telegramConfigured(),
@@ -101,6 +103,7 @@ function statusPayload() {
     contextIntervalMinutes: marketState.contextIntervalMinutes,
     correlationRequired: marketState.correlationRequired,
     catalystCorrelationMaxAgeMinutes: marketState.catalystCorrelationMaxAgeMinutes,
+    contextConfirmationScope: marketState.contextConfirmationScope,
     optionsMode: marketState.optionsMode,
     lastCoreScanAt: marketState.lastCoreScanAt,
     lastContextScanAt: marketState.lastContextScanAt,
@@ -108,6 +111,9 @@ function statusPayload() {
     lastOptionsScanAt: marketState.lastOptionsScanAt,
     lastAlertAt,
     journalStats: journalState.stats,
+    journalPersistence: journalState.persistence,
+    catalystPersistence: catalystState.persistence,
+    calibration: journalState.calibration,
     sourceStatus: catalystState.sources,
     time: new Date().toISOString()
   };
@@ -196,8 +202,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.2 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first + correlation gate ${market.getState().correlationRequired}; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 v4.3 running on port ${PORT}`);
+  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired}; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 persistence: journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}`);
   market.start();
   catalysts.start();
 });
