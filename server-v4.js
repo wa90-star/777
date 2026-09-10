@@ -38,9 +38,7 @@ async function sendTelegramMessage(text) {
       signal: controller.signal
     });
     const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.description || `Telegram HTTP ${response.status}`);
-    }
+    if (!response.ok || !data.ok) throw new Error(data.description || `Telegram HTTP ${response.status}`);
     return data.result;
   } finally {
     clearTimeout(timer);
@@ -117,9 +115,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
-    if (requestUrl.pathname === "/api/status") {
-      return sendJson(res, 200, statusPayload());
-    }
+    if (requestUrl.pathname === "/api/status") return sendJson(res, 200, statusPayload());
 
     if (requestUrl.pathname === "/api/scan" || requestUrl.pathname === "/api/core") {
       if (requestUrl.searchParams.get("refresh") === "1") await market.runCore(true);
@@ -147,12 +143,19 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    if (requestUrl.pathname === "/api/catalysts") {
-      return sendJson(res, 200, catalysts.getState());
-    }
+    if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, catalysts.getState());
 
     if (requestUrl.pathname === "/api/options") {
-      const symbol = (requestUrl.searchParams.get("symbol") || "GLD").trim().toUpperCase();
+      const requested = requestUrl.searchParams.get("symbol");
+      if (!requested) {
+        const cached = market.getState().options;
+        return sendJson(res, 200, cached || {
+          mode: "INDICATIVE / DELAYED",
+          top: [],
+          time: null
+        });
+      }
+      const symbol = requested.trim().toUpperCase();
       if (!["GLD", "SLV", "USO"].includes(symbol)) {
         return sendJson(res, 400, { error: "Options confirmation is limited to GLD, SLV and USO" });
       }
@@ -174,17 +177,11 @@ const server = http.createServer(async (req, res) => {
           time: new Date().toISOString()
         });
       } catch (error) {
-        return sendJson(res, 502, {
-          error: "Quote request failed",
-          message: error.message
-        });
+        return sendJson(res, 502, { error: "Quote request failed", message: error.message });
       }
     }
 
-    if (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html") {
-      return serveDashboard(res);
-    }
-
+    if (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html") return serveDashboard(res);
     return sendJson(res, 404, { error: "Not found" });
   } catch (error) {
     console.error("777 request error:", error.message);
