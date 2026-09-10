@@ -24,6 +24,7 @@ const COMMODITY_KEYWORDS = {
 };
 
 const OPTION_SYMBOLS = new Set(["GLD", "SLV", "USO"]);
+const EXTREME_OVERRIDE_SYMBOLS = new Set(["GLD", "SLV", "USO", "UNG"]);
 const CORE_INTERVAL_MS = 5 * 60 * 1000;
 const CONTEXT_INTERVAL_MS = 20 * 60 * 1000;
 const OPTION_COOLDOWN_MS = 30 * 60 * 1000;
@@ -31,6 +32,8 @@ const ALERT_COOLDOWN_MS = 60 * 60 * 1000;
 const CATALYST_CORRELATION_MAX_AGE_MS = 90 * 60 * 1000;
 const CONTEXT_CORRELATION_MAX_AGE_MS = 30 * 60 * 1000;
 const CORRELATION_REQUIRED = 2;
+const EXTREME_DAY_MULTIPLIER = 2.5;
+const EXTREME_VELOCITY_MULTIPLIER = 2.0;
 
 function timeoutSignal(ms) {
   const controller = new AbortController();
@@ -126,7 +129,7 @@ function createMarketEngine({
         headers: {
           "APCA-API-KEY-ID": alpacaKey,
           "APCA-API-SECRET-KEY": alpacaSecret,
-          "User-Agent": "777-signal-radar/4.3"
+          "User-Agent": "777-signal-radar/4.4"
         },
         signal: t.signal
       });
@@ -182,6 +185,15 @@ function createMarketEngine({
     if (score >= 70 && direction !== "KEIN SIGNAL") priority = "HIGH";
     else if (score >= 45 && direction !== "KEIN SIGNAL") priority = "MEDIUM";
 
+    const extremeDay = dayRatio >= EXTREME_DAY_MULTIPLIER;
+    const extremeVelocity = Boolean(prior && velocityRatio >= EXTREME_VELOCITY_MULTIPLIER);
+    const extreme = kind === "commodity" && EXTREME_OVERRIDE_SYMBOLS.has(symbol) && direction !== "KEIN SIGNAL" && (extremeDay || extremeVelocity);
+    const extremeReason = extremeDay
+      ? `Tagesbewegung ${round(dayRatio, 1)}x Schwelle`
+      : extremeVelocity
+        ? `Kurzfristbewegung ${round(velocityRatio, 1)}x Schwelle`
+        : null;
+
     return {
       symbol,
       name: config.name,
@@ -195,6 +207,8 @@ function createMarketEngine({
       direction,
       score,
       priority,
+      extreme,
+      extremeReason,
       source: "Alpaca IEX",
       marketTime: latestTrade?.t ?? latestTrade?.timestamp ?? daily.t ?? daily.timestamp ?? null
     };
@@ -207,7 +221,7 @@ function createMarketEngine({
   function primeSignals(signals) {
     const now = Date.now();
     for (const signal of signals) {
-      if (signal.priority !== "HIGH" || signal.direction === "KEIN SIGNAL") continue;
+      if (signal.direction === "KEIN SIGNAL" || (signal.priority !== "HIGH" && !signal.extreme)) continue;
       const durable = recentSignalAlert(signal.symbol, signal.direction, ALERT_COOLDOWN_MS);
       alertState.set(signalKey(signal), durable ? {
         sentAt: safeTime(durable.createdAt),
@@ -300,10 +314,13 @@ function createMarketEngine({
     });
 
     const count = confirmations.reduce((sum, x) => sum + x.weight, 0);
+    const correlated = count >= CORRELATION_REQUIRED;
     return {
       count,
       required: CORRELATION_REQUIRED,
-      qualified: count >= CORRELATION_REQUIRED,
+      qualified: correlated,
+      extremeOverride: Boolean(signal.extreme && !correlated),
+      alertQualified: correlated || Boolean(signal.extreme),
       labels: confirmations.map((x) => x.label),
       confirmations,
       catalyst: catalyst ? {
@@ -333,15 +350,18 @@ function createMarketEngine({
     } : null;
     if (!memory) return durable;
     if (!durable) return memory;
+    if (memory.startupBaseline) return durable;
     if ((durable.correlationCount || 1) > (memory.correlationCount || 1)) return durable;
     if ((durable.correlationCount || 1) < (memory.correlationCount || 1)) return memory;
     return durable.sentAt > memory.sentAt ? durable : memory;
   }
 
   function shouldAlert(signal, correlation) {
-    if (signal.priority !== "HIGH" || signal.direction === "KEIN SIGNAL" || !correlation.qualified) return false;
+    if (signal.direction === "KEIN SIGNAL" || !correlation.alertQualified) return false;
+    if (!signal.extreme && signal.priority !== "HIGH") return false;
     const prior = priorAlertFor(signal);
     if (!prior) return true;
+    if (prior.startupBaseline && signal.extreme) return true;
     if ((prior.correlationCount || 1) < correlation.count) return true;
     if (signal.score >= (prior.score || 0) + 15) return true;
     return Date.now() - prior.sentAt >= ALERT_COOLDOWN_MS;
@@ -352,25 +372,29 @@ function createMarketEngine({
     const velocity = signal.velocityMinutes == null
       ? "noch keine Vergleichsmessung"
       : `${signal.velocityPct >= 0 ? "+" : ""}${signal.velocityPct.toFixed(2)}% / ${signal.velocityMinutes} min`;
+    const headline = correlation.extremeOverride
+      ? "777 EXTREMES ROHSTOFF-SIGNAL"
+      : "777 KORRELIERTES ROHSTOFF-SIGNAL";
     return [
-      "777 KORRELIERTES ROHSTOFF-SIGNAL",
+      headline,
       "",
       `${signal.direction} ${signal.name} (${signal.symbol})`,
       `Preis: ${signal.price}`,
       `Tagesbewegung: ${sign}${signal.percentChange.toFixed(2)}%`,
       `Kurzfristig: ${velocity}`,
       `Score: ${signal.score}/100`,
-      `Bestätigungen: ${correlation.count}/${correlation.required}`,
+      `Bestätigungen: ${correlation.count}/${correlation.required}${correlation.extremeOverride ? " · EXTREM-AUSNAHME" : ""}`,
+      signal.extremeReason ? `Extremgrund: ${signal.extremeReason}` : null,
       ...correlation.labels.map((x) => `• ${x}`),
       `Quelle Preis: ${signal.source}`
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
 
   async function alertSignals(signals) {
     state.correlations = [];
     if (!telegramConfigured()) return;
     const candidates = signals
-      .filter((s) => s.priority === "HIGH" && s.direction !== "KEIN SIGNAL")
+      .filter((s) => s.direction !== "KEIN SIGNAL" && (s.priority === "HIGH" || s.extreme))
       .sort((a, b) => b.score - a.score);
 
     for (const signal of candidates) {
@@ -379,12 +403,16 @@ function createMarketEngine({
         count: correlation.count,
         required: correlation.required,
         qualified: correlation.qualified,
+        extremeOverride: correlation.extremeOverride,
+        alertQualified: correlation.alertQualified,
         labels: correlation.labels
       };
       state.correlations.push({
         symbol: signal.symbol,
         direction: signal.direction,
         score: signal.score,
+        extreme: signal.extreme,
+        extremeReason: signal.extremeReason,
         ...signal.correlation
       });
       if (!shouldAlert(signal, correlation)) continue;
@@ -400,7 +428,7 @@ function createMarketEngine({
         onAlert?.(iso);
         onSignalAlert?.({ signal: { ...signal }, correlation });
       } catch (error) {
-        console.error("777 correlated market alert failed:", error.message);
+        console.error("777 market alert failed:", error.message);
       }
     }
   }
@@ -480,7 +508,7 @@ function createMarketEngine({
 
       if (wasPrimed) {
         const elevated = state.core
-          .filter((s) => s.priority === "HIGH" && s.direction !== "KEIN SIGNAL" && OPTION_SYMBOLS.has(s.symbol))
+          .filter((s) => s.direction !== "KEIN SIGNAL" && (s.priority === "HIGH" || s.extreme) && OPTION_SYMBOLS.has(s.symbol))
           .slice(0, 3);
         for (const signal of elevated) await optionConfirmation(signal.symbol);
         await alertSignals(state.core);
@@ -584,6 +612,9 @@ function createMarketEngine({
       catalystCorrelationMaxAgeMinutes: CATALYST_CORRELATION_MAX_AGE_MS / 60000,
       optionsMode: "indicative-confirmation-only",
       contextConfirmationScope: "gold-silver-directional-only",
+      extremeOverrideSymbols: [...EXTREME_OVERRIDE_SYMBOLS],
+      extremeDayMultiplier: EXTREME_DAY_MULTIPLIER,
+      extremeVelocityMultiplier: EXTREME_VELOCITY_MULTIPLIER,
       alpacaConfigured: alpacaConfigured()
     })
   };
