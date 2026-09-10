@@ -5,43 +5,86 @@ const sourcePath = path.join(__dirname, "index.js");
 const runtimePath = path.join(__dirname, "runtime-index.js");
 let source = fs.readFileSync(sourcePath, "utf8");
 
-source = source.replace(
+function replaceRequired(label, from, to) {
+  if (!source.includes(from)) {
+    throw new Error(`777 runtime patch failed: ${label}`);
+  }
+  source = source.replace(from, to);
+}
+
+replaceRequired(
+  "watchlist",
   'const WATCHLIST = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN"];',
   'const WATCHLIST = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "TSLA"];'
 );
 
-source = source.replace(
+replaceRequired(
+  "scan interval",
   "const AUTO_SCAN_MS = 15 * 60 * 1000;",
   "const AUTO_SCAN_MS = 7 * 60 * 1000;"
 );
 
-source = source.replace(
+replaceRequired(
+  "movement score",
   "score += Math.min(Math.abs(percentChange) * 15, 60);",
   "score += Math.min(Math.abs(percentChange) * 25, 70);"
 );
 
-source = source.replace(
+replaceRequired(
+  "volume score",
   "score += Math.min(volumeRatio * 25, 40);",
   "score += Math.min(volumeRatio * 30, 30);"
 );
 
-source = source.replace(
+replaceRequired(
+  "long threshold",
   "if (percentChange >= 2) {",
   "if (percentChange >= 1.5) {"
 );
 
-source = source.replace(
+replaceRequired(
+  "short threshold",
   "if (percentChange <= -2) {",
   "if (percentChange <= -1.5) {"
 );
 
-source = source.replace(
-  'path.join(__dirname, "public", "index.html")',
-  'path.join(__dirname, "public", "dashboard-v2.html")'
+replaceRequired(
+  "dashboard",
+  'path.join(\n      __dirname,\n      "public",\n      "index.html"\n    )',
+  'path.join(\n      __dirname,\n      "public",\n      "dashboard-v2.html"\n    )'
 );
 
-const windowFunction = `
-function automaticScanWindowOpen() {
+replaceRequired(
+  "monitoring labels",
+  'monitoring: [\n        "market-signals",\n        "telegram-alerts",\n        "political-signals",\n        "corporate-events",\n        "global-market-timing"\n      ]',
+  'monitoring: [\n        "market-signals",\n        "telegram-alerts",\n        "us-market-timing"\n      ]'
+);
+
+const cacheRoute = `  if (requestUrl.pathname === "/api/cache") {
+    return sendJson(res, 200, scanCache
+      ? { ...scanCache, cached: true }
+      : {
+          system: "777",
+          scanner: "market-radar",
+          watchlist: WATCHLIST,
+          signals: [],
+          errors: [],
+          strongestSignal: null,
+          cached: true,
+          time: null
+        }
+    );
+  }
+
+`;
+
+replaceRequired(
+  "cache route",
+  '  if (requestUrl.pathname === "/api/scan") {',
+  cacheRoute + '  if (requestUrl.pathname === "/api/scan") {'
+);
+
+const windowFunction = `function automaticScanWindowOpen() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     weekday: "short",
@@ -62,11 +105,12 @@ function automaticScanWindowOpen() {
 
 `;
 
-source = source.replace(
+replaceRequired(
+  "market window",
   "async function runAutomaticRadar() {",
   windowFunction + "async function runAutomaticRadar() {\n  if (!automaticScanWindowOpen()) return;"
 );
 
 fs.writeFileSync(runtimePath, source, "utf8");
-console.log("777 runtime v2 prepared");
+console.log("777 runtime v2 prepared and verified");
 require(runtimePath);
