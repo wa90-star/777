@@ -69,6 +69,8 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
   const alertState = new Map();
   const optionCheckedAt = new Map();
   const optionSeen = new Set();
+  let corePrimed = false;
+  let contextPrimed = false;
 
   const state = {
     source: "alpaca-iex",
@@ -173,10 +175,22 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
     };
   }
 
+  function stateKey(signal) {
+    return `${signal.kind}:${signal.symbol}:${signal.direction}`;
+  }
+
+  function primeSignals(signals) {
+    const now = Date.now();
+    for (const signal of signals) {
+      if (signal.priority === "HIGH" && signal.direction !== "KEIN SIGNAL") {
+        alertState.set(stateKey(signal), { sentAt: now, score: signal.score });
+      }
+    }
+  }
+
   function shouldAlert(signal) {
     if (signal.priority !== "HIGH" || signal.direction === "KEIN SIGNAL") return false;
-    const key = `${signal.kind}:${signal.symbol}:${signal.direction}`;
-    const prior = alertState.get(key);
+    const prior = alertState.get(stateKey(signal));
     if (!prior) return true;
     if (signal.score >= prior.score + 15) return true;
     return Date.now() - prior.sentAt >= ALERT_COOLDOWN_MS;
@@ -205,10 +219,7 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
     for (const signal of signals.filter(shouldAlert).sort((a, b) => b.score - a.score).slice(0, 2)) {
       try {
         await sendMessage(marketAlertText(signal));
-        alertState.set(`${signal.kind}:${signal.symbol}:${signal.direction}`, {
-          sentAt: Date.now(),
-          score: signal.score
-        });
+        alertState.set(stateKey(signal), { sentAt: Date.now(), score: signal.score });
         onAlert?.(new Date().toISOString());
       } catch (error) {
         console.error("777 market alert failed:", error.message);
@@ -223,16 +234,9 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
     optionCheckedAt.set(symbol, Date.now());
 
     const updatedSince = new Date(Date.now() - 45 * 60 * 1000).toISOString();
-    const params = new URLSearchParams({
-      feed: "indicative",
-      limit: "200",
-      updated_since: updatedSince
-    });
+    const params = new URLSearchParams({ feed: "indicative", limit: "200", updated_since: updatedSince });
     try {
-      const data = await alpacaJson(
-        `https://data.alpaca.markets/v1beta1/options/snapshots/${encodeURIComponent(symbol)}?${params}`,
-        12000
-      );
+      const data = await alpacaJson(`https://data.alpaca.markets/v1beta1/options/snapshots/${encodeURIComponent(symbol)}?${params}`, 12000);
       const snapshots = data.snapshots || {};
       const candidates = [];
       for (const [contract, snapshot] of Object.entries(snapshots)) {
@@ -243,7 +247,7 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
         const time = trade.t ?? trade.timestamp ?? null;
         const notional = price * size * 100;
         if (!time || Date.now() - new Date(time).getTime() > 60 * 60 * 1000) continue;
-        if (notional < 250000) continue;
+        if (notional < 500000) continue;
         const m = contract.match(/^([A-Z.]+)(\d{6})([CP])(\d{8})$/);
         candidates.push({
           contract,
@@ -266,7 +270,7 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
 
       const big = candidates[0];
       const key = big ? `${big.contract}:${big.time}` : null;
-      if (big && big.notional >= 500000 && !optionSeen.has(key) && telegramConfigured()) {
+      if (big && big.notional >= 1000000 && !optionSeen.has(key) && telegramConfigured()) {
         optionSeen.add(key);
         try {
           await sendMessage([
@@ -289,14 +293,14 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
     }
   }
 
-  async function runGroup(config, kind) {
+  async function runGroup(config, kind, allowAlerts) {
     const symbols = Object.keys(config);
     const snapshots = await fetchSnapshots(symbols);
     const results = symbols
       .filter((symbol) => snapshots?.[symbol])
       .map((symbol) => analyze(symbol, snapshots[symbol], config[symbol], kind))
       .sort((a, b) => b.score - a.score);
-    await alertSignals(results);
+    if (allowAlerts) await alertSignals(results);
     return results;
   }
 
@@ -304,11 +308,17 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
     state.marketWindowOpen = marketWindowOpen();
     if (!force && !state.marketWindowOpen) return state.core;
     try {
-      state.core = await runGroup(CORE, "commodity");
+      const wasPrimed = corePrimed;
+      state.core = await runGroup(CORE, "commodity", wasPrimed);
       state.lastCoreScanAt = new Date().toISOString();
       state.lastError = null;
+      if (!corePrimed) {
+        primeSignals(state.core);
+        corePrimed = true;
+        console.log("777 commodity baseline primed; startup alerts suppressed");
+      }
       const elevated = state.core.find((s) => s.priority === "HIGH" && OPTION_SYMBOLS.has(s.symbol));
-      if (elevated) await optionConfirmation(elevated.symbol);
+      if (wasPrimed && elevated) await optionConfirmation(elevated.symbol);
       console.log(`777 commodity scan complete: ${state.core.length} instruments`);
       return state.core;
     } catch (error) {
@@ -322,9 +332,15 @@ function createMarketEngine({ sendMessage, telegramConfigured, onAlert }) {
     state.marketWindowOpen = marketWindowOpen();
     if (!force && !state.marketWindowOpen) return state.context;
     try {
-      state.context = await runGroup(CONTEXT, "extreme-context");
+      const wasPrimed = contextPrimed;
+      state.context = await runGroup(CONTEXT, "extreme-context", wasPrimed);
       state.lastContextScanAt = new Date().toISOString();
       state.lastError = null;
+      if (!contextPrimed) {
+        primeSignals(state.context);
+        contextPrimed = true;
+        console.log("777 context baseline primed; startup alerts suppressed");
+      }
       console.log(`777 context scan complete: ${state.context.length} sentinels`);
       return state.context;
     } catch (error) {
