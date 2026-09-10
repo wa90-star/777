@@ -80,7 +80,10 @@ function isRecent(item) {
 function classify(item, baseScore) {
   const check = relevant(`${item.title || ""} ${item.text || ""}`);
   if (!check.hits.length) return null;
-  const score = Math.min(100, baseScore + Math.min(check.hits.length * 7, 21) + Math.min(check.urgentHits.length * 7, 14));
+  const score = Math.min(
+    100,
+    baseScore + Math.min(check.hits.length * 7, 21) + Math.min(check.urgentHits.length * 7, 14)
+  );
   return {
     ...item,
     score,
@@ -118,7 +121,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
     try {
       const response = await fetch(url, {
         headers: {
-          "User-Agent": "777-signal-radar/4 market-monitor",
+          "User-Agent": "777-signal-radar/4.1 market-monitor",
           Accept: "*/*",
           ...headers
         },
@@ -146,12 +149,16 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
   async function accept(sourceKey, rawItems, baseScore) {
     pruneSeen();
     const now = Date.now();
+    const isBaseline = !primed.has(sourceKey);
+    const detectedAt = new Date(now).toISOString();
+
     const normalized = rawItems
       .filter(isRecent)
       .map((item) => classify(item, baseScore))
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((item) => ({ ...item, detectedAt, baseline: isBaseline }));
 
-    if (!primed.has(sourceKey)) {
+    if (isBaseline) {
       for (const item of rawItems) seen.set(item.id || item.url, now);
       primed.add(sourceKey);
       if (normalized.length) state.items = [...normalized, ...state.items].slice(0, 30);
@@ -159,7 +166,10 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
       return;
     }
 
-    const fresh = normalized.filter((item) => !seen.has(item.id || item.url));
+    const fresh = normalized
+      .filter((item) => !seen.has(item.id || item.url))
+      .map((item) => ({ ...item, baseline: false }));
+
     for (const item of rawItems) seen.set(item.id || item.url, now);
     if (fresh.length) state.items = [...fresh, ...state.items].slice(0, 30);
 
