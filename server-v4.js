@@ -1,14 +1,16 @@
-// 777 Signal Radar Pro v4 - commodity-first runtime
+// 777 Signal Radar Pro v4.1 - commodity-first correlation runtime
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const createMarketEngine = require("./market-engine-v4");
 const createCatalystEngine = require("./catalyst-v4");
+const createSignalJournal = require("./signal-journal-v4");
 
 const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 let lastAlertAt = null;
+let journal = null;
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -31,11 +33,7 @@ async function sendTelegramMessage(text) {
     const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-        disable_web_page_preview: true
-      }),
+      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
       signal: controller.signal
     });
     const data = await response.json();
@@ -50,32 +48,40 @@ function recordAlert(iso) {
   lastAlertAt = iso || new Date().toISOString();
 }
 
-const market = createMarketEngine({
-  sendMessage: sendTelegramMessage,
-  telegramConfigured,
-  onAlert: recordAlert
-});
-
 const catalysts = createCatalystEngine({
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert
 });
 
+const market = createMarketEngine({
+  sendMessage: sendTelegramMessage,
+  telegramConfigured,
+  onAlert: recordAlert,
+  getCatalystState: () => catalysts.getState(),
+  onSignalAlert: (entry) => journal?.record(entry),
+  onCoreScan: (signals) => journal?.observe(signals)
+});
+
+journal = createSignalJournal({ quote: market.quote });
+
 function statusPayload() {
   const marketState = market.getState();
   const catalystState = catalysts.getState();
+  const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.0",
+    version: "4.1",
     status: "online",
     focus: "commodity-first",
     strategy: [
       "commodity-price-anomalies",
+      "correlation-gate-2-independent-confirmations",
       "extreme-cross-market-context",
       "influential-public-statements",
       "official-policy-catalysts",
-      "indicative-options-confirmation"
+      "directional-options-confirmation",
+      "automatic-30m-2h-outcome-checks"
     ],
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
@@ -85,12 +91,15 @@ function statusPayload() {
     contextSymbols: marketState.contextSymbols,
     coreIntervalMinutes: marketState.coreIntervalMinutes,
     contextIntervalMinutes: marketState.contextIntervalMinutes,
+    correlationRequired: marketState.correlationRequired,
+    catalystCorrelationMaxAgeMinutes: marketState.catalystCorrelationMaxAgeMinutes,
     optionsMode: marketState.optionsMode,
     lastCoreScanAt: marketState.lastCoreScanAt,
     lastContextScanAt: marketState.lastContextScanAt,
     lastCatalystScanAt: catalystState.lastScanAt,
     lastOptionsScanAt: marketState.lastOptionsScanAt,
     lastAlertAt,
+    journalStats: journalState.stats,
     sourceStatus: catalystState.sources,
     time: new Date().toISOString()
   };
@@ -104,10 +113,7 @@ function serveDashboard(res) {
       res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
       return res.end("Server error");
     }
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store"
-    });
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
     res.end(data);
   });
 }
@@ -125,7 +131,9 @@ const server = http.createServer(async (req, res) => {
         system: "777",
         scanner: "commodity-core",
         source: state.source,
+        correlationRequired: state.correlationRequired,
         signals: state.core,
+        correlations: state.correlations,
         lastScanAt: state.lastCoreScanAt,
         time: new Date().toISOString()
       });
@@ -145,39 +153,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, catalysts.getState());
+    if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
 
     if (requestUrl.pathname === "/api/options") {
       const cached = market.getState().options;
       const requested = requestUrl.searchParams.get("symbol");
       const refresh = requestUrl.searchParams.get("refresh") === "1";
       if (!requested || !refresh) {
-        return sendJson(res, 200, cached || {
-          mode: "INDICATIVE / DELAYED",
-          top: [],
-          time: null
-        });
+        return sendJson(res, 200, cached || { mode: "INDICATIVE / DELAYED", top: [], time: null });
       }
       const symbol = requested.trim().toUpperCase();
       if (!["GLD", "SLV", "USO"].includes(symbol)) {
         return sendJson(res, 400, { error: "Options confirmation is limited to GLD, SLV and USO" });
       }
       const result = await market.optionConfirmation(symbol);
-      return sendJson(res, 200, result || {
-        symbol,
-        mode: "INDICATIVE / DELAYED",
-        top: [],
-        time: new Date().toISOString()
-      });
+      return sendJson(res, 200, result || { symbol, mode: "INDICATIVE / DELAYED", top: [], time: new Date().toISOString() });
     }
 
     if (requestUrl.pathname === "/api/quote") {
       const symbol = (requestUrl.searchParams.get("symbol") || "GLD").trim().toUpperCase();
       try {
-        return sendJson(res, 200, {
-          system: "777",
-          data: await market.quote(symbol),
-          time: new Date().toISOString()
-        });
+        return sendJson(res, 200, { system: "777", data: await market.quote(symbol), time: new Date().toISOString() });
       } catch (error) {
         return sendJson(res, 502, { error: "Quote request failed", message: error.message });
       }
@@ -192,8 +188,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 v4.1 running on port ${PORT}`);
+  console.log(`777 focus: commodity-first + correlation gate ${market.getState().correlationRequired}; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   market.start();
   catalysts.start();
 });
