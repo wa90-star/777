@@ -4,8 +4,8 @@ const path = require("path");
 
 const PORT = process.env.PORT || 3000;
 const TWELVE_API_KEY = process.env.TWELVE;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN_777;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID_777;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const WATCHLIST = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN"];
 const SCAN_CACHE_MS = 60 * 1000;
