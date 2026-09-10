@@ -153,3 +153,5 @@ replaceRequired(
 fs.writeFileSync(runtimePath, source, "utf8");
 console.log("777 runtime v3 prepared and verified");
 require(runtimePath);
+
+// production trigger v3
