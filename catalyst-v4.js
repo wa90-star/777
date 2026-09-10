@@ -92,7 +92,7 @@ function classify(item, baseScore) {
   };
 }
 
-function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
+function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant }) {
   const seen = new Map();
   const primed = new Set();
   const state = {
@@ -174,6 +174,13 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
     if (fresh.length) state.items = [...fresh, ...state.items].slice(0, 30);
 
     const alerts = fresh.filter((item) => item.priority === "HIGH").slice(0, 2);
+    if (alerts.length) {
+      try {
+        onFreshRelevant?.(alerts);
+      } catch (error) {
+        console.error("777 catalyst trigger callback failed:", error.message);
+      }
+    }
     if (telegramConfigured()) {
       for (const item of alerts) {
         try {
