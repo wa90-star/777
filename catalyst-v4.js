@@ -1,8 +1,8 @@
 const KEYWORDS = [
-  "oil", "crude", "petroleum", "gas", "natural gas", "lng", "pipeline",
+  "oil", "crude", "petroleum", "natural gas", "lng", "pipeline",
   "gold", "silver", "copper", "uranium", "steel", "aluminum", "aluminium",
   "rare earth", "mining", "minerals", "commodity", "commodities",
-  "opec", "energy", "refinery", "drilling", "agriculture", "grain", "wheat",
+  "opec", "refinery", "drilling", "agriculture", "grain", "wheat",
   "corn", "soybean", "soybeans", "tariff", "tariffs", "sanction", "sanctions",
   "russia", "iran", "china", "export ban", "export control", "trade restriction",
   "interest rate", "rate cut", "rate hike", "inflation", "monetary policy", "fomc",
@@ -22,6 +22,8 @@ const POLL = {
   federalRegister: 10 * 60 * 1000,
   pelosi: 15 * 60 * 1000
 };
+
+const DISPLAY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 function timeoutSignal(ms) {
   const controller = new AbortController();
@@ -66,6 +68,13 @@ function relevant(text) {
   const hits = KEYWORDS.filter((word) => lower.includes(word));
   const urgentHits = URGENT.filter((word) => lower.includes(word));
   return { hits, urgentHits };
+}
+
+function isRecent(item) {
+  if (!item.publishedAt) return true;
+  const t = new Date(item.publishedAt).getTime();
+  if (!Number.isFinite(t)) return true;
+  return Date.now() - t <= DISPLAY_MAX_AGE_MS;
 }
 
 function classify(item, baseScore) {
@@ -137,13 +146,16 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
   async function accept(sourceKey, rawItems, baseScore) {
     pruneSeen();
     const now = Date.now();
-    const normalized = rawItems.map((item) => classify(item, baseScore)).filter(Boolean);
+    const normalized = rawItems
+      .filter(isRecent)
+      .map((item) => classify(item, baseScore))
+      .filter(Boolean);
 
     if (!primed.has(sourceKey)) {
       for (const item of rawItems) seen.set(item.id || item.url, now);
       primed.add(sourceKey);
       if (normalized.length) state.items = [...normalized, ...state.items].slice(0, 30);
-      console.log(`777 catalyst source primed: ${sourceKey}, ${normalized.length} relevant`);
+      console.log(`777 catalyst source primed: ${sourceKey}, ${normalized.length} recent relevant`);
       return;
     }
 
@@ -243,7 +255,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
         id: `fr:${x.document_number || x.html_url}`,
         source: "Federal Register · official",
         title: x.title || "",
-        text: `${x.abstract || ""} ${(x.agencies || []).map((a) => a.name || a.raw_name || "").join(" ")}`,
+        text: x.abstract || "",
         url: x.html_url || "",
         publishedAt: x.publication_date || null
       }));
@@ -278,7 +290,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
     try {
       const html = await getText("https://pelosi.house.gov/news/press-releases", 10000);
       const items = pelosiItems(html);
-      await accept("pelosi", items, 58);
+      await accept("pelosi", items, 65);
       markSource("pelosiOfficial", true);
     } catch (error) {
       markSource("pelosiOfficial", false, error.message);
@@ -311,6 +323,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
     getState: () => ({
       ...state,
       focus: "commodity-relevant influential statements and official policy",
+      displayMaxAgeDays: DISPLAY_MAX_AGE_MS / 86400000,
       pollingMinutes: {
         trumpTruth: POLL.trump / 60000,
         federalReserve: POLL.fed / 60000,
