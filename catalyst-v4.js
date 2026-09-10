@@ -5,8 +5,8 @@ const KEYWORDS = [
   "opec", "energy", "refinery", "drilling", "agriculture", "grain", "wheat",
   "corn", "soybean", "soybeans", "tariff", "tariffs", "sanction", "sanctions",
   "russia", "iran", "china", "export ban", "export control", "trade restriction",
-  "interest rate", "rate cut", "rate hike", "inflation", "federal reserve",
-  "dollar", "treasury", "strategic petroleum reserve", "spr"
+  "interest rate", "rate cut", "rate hike", "inflation", "monetary policy", "fomc",
+  "balance sheet", "liquidity", "dollar", "treasury", "strategic petroleum reserve", "spr"
 ];
 
 const URGENT = [
@@ -82,7 +82,6 @@ function classify(item, baseScore) {
 
 function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
   const seen = new Map();
-  let trumpLatestId = null;
   const primed = new Set();
   const state = {
     items: [],
@@ -138,16 +137,12 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
   async function accept(sourceKey, rawItems, baseScore) {
     pruneSeen();
     const now = Date.now();
-    const normalized = rawItems
-      .map((item) => classify(item, baseScore))
-      .filter(Boolean);
+    const normalized = rawItems.map((item) => classify(item, baseScore)).filter(Boolean);
 
     if (!primed.has(sourceKey)) {
       for (const item of rawItems) seen.set(item.id || item.url, now);
       primed.add(sourceKey);
-      if (normalized.length) {
-        state.items = [...normalized, ...state.items].slice(0, 30);
-      }
+      if (normalized.length) state.items = [...normalized, ...state.items].slice(0, 30);
       console.log(`777 catalyst source primed: ${sourceKey}, ${normalized.length} relevant`);
       return;
     }
@@ -184,31 +179,16 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert }) {
 
   async function scanTrump() {
     try {
-      const params = new URLSearchParams({ exclude_replies: "true" });
-      if (trumpLatestId) params.set("min_id", trumpLatestId);
-      const data = await getJson(
-        `https://truthsocial.com/api/v1/accounts/107780257626128497/statuses?${params}`,
-        9000
-      );
-      const statuses = Array.isArray(data) ? data : [];
-      const items = statuses.map((s) => {
-        const text = stripHtml(s.content);
-        const quoteText = stripHtml(s.quote?.content);
-        const combined = [text, quoteText].filter(Boolean).join(" ");
-        return {
-          id: `trump:${s.id}`,
-          source: "Donald Trump · Truth Social",
-          title: combined,
-          text: combined,
-          url: s.url || s.uri || "",
-          publishedAt: s.created_at || null
-        };
-      }).filter((x) => x.title);
-
-      const ids = statuses.map((s) => s.id).filter(Boolean);
-      if (ids.length) {
-        trumpLatestId = ids.reduce((a, b) => BigInt(a) > BigInt(b) ? a : b);
-      }
+      const data = await getJson("https://trump.fm/api/posts?limit=10&platform=truth&includeDeleted=false", 9000);
+      const posts = Array.isArray(data?.data) ? data.data : [];
+      const items = posts.map((p) => ({
+        id: `trump:${p.id}`,
+        source: "Donald Trump · Truth Social mirror",
+        title: stripHtml(p.content),
+        text: stripHtml(p.content),
+        url: p.id ? `https://trump.fm/post/${p.id}` : "",
+        publishedAt: p.createdAt || null
+      })).filter((x) => x.title);
       await accept("trump", items, 70);
       markSource("trumpTruth", true);
     } catch (error) {
