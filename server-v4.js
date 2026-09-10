@@ -55,9 +55,9 @@ const catalysts = createCatalystEngine({
   onAlert: recordAlert,
   onFreshRelevant: (items) => {
     if (!market || !items?.length) return;
-    const timer = setTimeout(() => market.runCore(true), 0);
+    const timer = setTimeout(() => market.runCore(), 0);
     if (typeof timer.unref === "function") timer.unref();
-    console.log(`777 event-driven market check queued: ${items.length} fresh catalyst(s)`);
+    console.log(`777 event-driven market check queued: ${items.length} fresh catalyst(s); market-window gate retained`);
   }
 });
 
@@ -72,6 +72,8 @@ market = createMarketEngine({
 });
 
 journal = createSignalJournal({ quote: market.quote });
+const latestRecordedSignal = journal.getState().entries?.[0];
+if (latestRecordedSignal?.createdAt) lastAlertAt = latestRecordedSignal.createdAt;
 
 function statusPayload() {
   const marketState = market.getState();
@@ -91,7 +93,7 @@ function statusPayload() {
       "official-policy-catalysts",
       "directional-options-confirmation",
       "persistent-30m-2h-outcome-journal",
-      "event-driven-market-recheck-after-fresh-catalyst"
+      "event-driven-market-recheck-inside-market-window"
     ],
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
