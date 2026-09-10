@@ -1,9 +1,10 @@
-// 777 Signal Radar Pro v4.5 - focused, read-only public runtime
+// 777 Signal Radar Pro v4.6 - focused commodity runtime with official EIA catalysts
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const createMarketEngine = require("./market-engine-v4");
 const createCatalystEngine = require("./catalyst-v4");
+const createEiaEngine = require("./eia-v4");
 const createSignalJournal = require("./signal-journal-v4");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -50,23 +51,58 @@ function recordAlert(iso) {
   lastAlertAt = iso || new Date().toISOString();
 }
 
+function queueMarketRecheck(items, source) {
+  if (!market || !items?.length) return;
+  const timer = setTimeout(() => market.runCore(), 0);
+  if (typeof timer.unref === "function") timer.unref();
+  console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); market-window gate retained`);
+}
+
 const catalysts = createCatalystEngine({
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert,
-  onFreshRelevant: (items) => {
-    if (!market || !items?.length) return;
-    const timer = setTimeout(() => market.runCore(), 0);
-    if (typeof timer.unref === "function") timer.unref();
-    console.log(`777 event-driven market check queued: ${items.length} fresh catalyst(s); market-window gate retained`);
-  }
+  onFreshRelevant: (items) => queueMarketRecheck(items, "policy")
 });
+
+const eia = createEiaEngine({
+  sendMessage: sendTelegramMessage,
+  telegramConfigured,
+  onAlert: recordAlert,
+  onFreshRelevant: (items) => queueMarketRecheck(items, "EIA")
+});
+
+function combinedCatalystState() {
+  const policy = catalysts.getState();
+  const energy = eia.getState();
+  const items = [...(policy.items || []), ...(energy.items || [])]
+    .sort((a, b) => new Date(b.detectedAt || b.publishedAt || 0).getTime() - new Date(a.detectedAt || a.publishedAt || 0).getTime())
+    .slice(0, 40);
+  const scanTimes = [policy.lastScanAt, energy.lastScanAt]
+    .filter(Boolean)
+    .map((x) => new Date(x).getTime())
+    .filter(Number.isFinite);
+  return {
+    items,
+    lastScanAt: scanTimes.length ? new Date(Math.max(...scanTimes)).toISOString() : null,
+    sources: { ...(policy.sources || {}), ...(energy.sources || {}) },
+    focus: "commodity-relevant policy and official US energy releases",
+    persistence: {
+      policy: policy.persistence,
+      eia: energy.persistence
+    },
+    pollingMinutes: {
+      ...(policy.pollingMinutes || {}),
+      eiaOfficial: energy.pollingMinutes
+    }
+  };
+}
 
 market = createMarketEngine({
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert,
-  getCatalystState: () => catalysts.getState(),
+  getCatalystState: combinedCatalystState,
   recentSignalAlert: (symbol, direction, maxAgeMs) => journal?.recentAlertFor(symbol, direction, maxAgeMs) || null,
   onSignalAlert: (entry) => journal?.record(entry),
   onCoreScan: (signals) => journal?.observe(signals)
@@ -78,11 +114,13 @@ if (latestRecordedSignal?.createdAt) lastAlertAt = latestRecordedSignal.createdA
 
 function statusPayload() {
   const marketState = market.getState();
-  const catalystState = catalysts.getState();
+  const catalystState = combinedCatalystState();
+  const policyState = catalysts.getState();
+  const eiaState = eia.getState();
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.5",
+    version: "4.6",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -91,6 +129,7 @@ function statusPayload() {
       "correlation-gate-2-independent-confirmations",
       "extreme-commodity-override-for-gld-slv-uso-ung",
       "direction-consistent-catalyst-confirmation",
+      "official-eia-energy-catalysts",
       "restricted-directional-cross-market-confirmation",
       "influential-public-statements",
       "official-policy-catalysts",
@@ -115,14 +154,18 @@ function statusPayload() {
     extremeDayMultiplier: marketState.extremeDayMultiplier,
     extremeVelocityMultiplier: marketState.extremeVelocityMultiplier,
     optionsMode: marketState.optionsMode,
+    eiaPollingMinutes: eiaState.pollingMinutes,
     lastCoreScanAt: marketState.lastCoreScanAt,
     lastContextScanAt: marketState.lastContextScanAt,
     lastCatalystScanAt: catalystState.lastScanAt,
+    lastPolicyScanAt: policyState.lastScanAt,
+    lastEiaScanAt: eiaState.lastScanAt,
     lastOptionsScanAt: marketState.lastOptionsScanAt,
     lastAlertAt,
     journalStats: journalState.stats,
     journalPersistence: journalState.persistence,
-    catalystPersistence: catalystState.persistence,
+    catalystPersistence: policyState.persistence,
+    eiaPersistence: eiaState.persistence,
     calibration: journalState.calibration,
     sourceStatus: catalystState.sources,
     time: new Date().toISOString()
@@ -174,7 +217,8 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, catalysts.getState());
+    if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, combinedCatalystState());
+    if (requestUrl.pathname === "/api/eia") return sendJson(res, 200, eia.getState());
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
 
     if (requestUrl.pathname === "/api/options") {
@@ -203,9 +247,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.5 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
-  console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}`);
+  console.log(`777 v4.6 running on port ${PORT}`);
+  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}`);
   market.start();
   catalysts.start();
+  eia.start();
 });
