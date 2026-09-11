@@ -1,3 +1,4 @@
+// 777 startup journal dedupe guard v4.8.2
 const fs = require("fs");
 const path = require("path");
 
