@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.8.2 - focused commodity runtime with stricter signal quality gates
+// 777 Signal Radar Pro v4.8.3 - focused commodity runtime with stricter signal quality gates
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -93,12 +93,28 @@ function marketSignalKey(meta) {
   return `${meta.symbol}:${meta.direction}`;
 }
 
+function liveMarketSignal(meta) {
+  return market?.getState()?.core?.find((x) => x.symbol === meta.symbol) || null;
+}
+
 function marketDataFresh(meta) {
-  const live = market?.getState()?.core?.find((x) => x.symbol === meta.symbol);
+  const live = liveMarketSignal(meta);
   const marketMs = new Date(live?.marketTime || "").getTime();
   if (!Number.isFinite(marketMs)) return false;
   const ageMs = Date.now() - marketMs;
   return ageMs >= -5 * 60 * 1000 && ageMs <= MARKET_DATA_MAX_AGE_MS;
+}
+
+function extremeOverrideDirectionConsistent(text, meta) {
+  if (!String(text || "").startsWith("777 EXTREMES ROHSTOFF-SIGNAL")) return true;
+  const live = liveMarketSignal(meta);
+  const dayMove = Number(live?.percentChange);
+  const velocity = Number(live?.velocityPct);
+  if (!Number.isFinite(dayMove) || !Number.isFinite(velocity)) return false;
+  const wantedSign = meta.direction === "LONG" ? 1 : -1;
+  const dayConflict = Math.abs(dayMove) >= 0.1 && Math.sign(dayMove) !== wantedSign;
+  const velocityConflict = Math.abs(velocity) >= 0.05 && Math.sign(velocity) !== wantedSign;
+  return !dayConflict && !velocityConflict;
 }
 
 function priorMarketDispatch(meta) {
@@ -140,6 +156,12 @@ async function sendMarketTelegramMessage(text) {
     console.log(`777 stale market alert suppressed: ${key}`);
     return { suppressed: true, reason: "stale-market-data" };
   }
+  if (!extremeOverrideDirectionConsistent(text, meta)) {
+    marketDispatchDecision.set(key, { sent: false, at: Date.now() });
+    lastMarketDispatchSent = false;
+    console.log(`777 conflicting extreme override suppressed: ${key}`);
+    return { suppressed: true, reason: "directional-conflict" };
+  }
   const sent = shouldDispatchMarketAlert(meta);
   marketDispatchDecision.set(key, { sent, at: Date.now() });
   lastMarketDispatchSent = sent;
@@ -166,7 +188,7 @@ function recordMarketSignal(entry) {
   const key = `${signal.symbol}:${signal.direction}`;
   const decision = marketDispatchDecision.get(key);
   if (decision && Date.now() - decision.at <= 5000 && !decision.sent) {
-    console.log(`777 duplicate journal signal suppressed: ${key}`);
+    console.log(`777 market journal signal suppressed: ${key}`);
     return null;
   }
   return journal?.record(entry);
@@ -241,7 +263,7 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.8.2",
+    version: "4.8.3",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -249,6 +271,7 @@ function statusPayload() {
       "commodity-price-anomalies",
       "correlation-gate-2-independent-confirmations",
       "extreme-commodity-override-for-gld-slv-uso-ung",
+      "extreme-override-direction-consistency-gate",
       "duplicate-signal-suppression-24h-with-confirmation-type-or-move-escalation",
       "stale-market-data-alert-block-30m",
       "administrative-catalyst-noise-filter",
@@ -373,10 +396,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.8.2 running on port ${PORT}`);
+  console.log(`777 v4.8.3 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
+  console.log("777 extreme override: blocked on material day/velocity direction conflict");
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}`);
   market.start();
   catalysts.start();
