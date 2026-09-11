@@ -1,10 +1,11 @@
-// 777 Signal Radar Pro v4.8.3 - focused commodity runtime with stricter signal quality gates
+// 777 Signal Radar Pro v4.9.0 - focused commodity runtime with official ECB event monitoring
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const createMarketEngine = require("./market-engine-v4");
 const createCatalystEngine = require("./catalyst-v4");
 const createEiaEngine = require("./eia-v4");
+const createEcbEngine = require("./ecb-v4");
 const createSignalJournal = require("./signal-journal-v4");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -194,11 +195,18 @@ function recordMarketSignal(entry) {
   return journal?.record(entry);
 }
 
-function queueMarketRecheck(items, source) {
+function queueMarketRecheck(items, source, refreshContext = false) {
   if (!market || !items?.length) return;
-  const timer = setTimeout(() => market.runCore(), 0);
+  const timer = setTimeout(async () => {
+    try {
+      if (refreshContext) await market.runContext();
+      await market.runCore();
+    } catch (error) {
+      console.error(`777 event-driven ${source} recheck failed:`, error.message);
+    }
+  }, 0);
   if (typeof timer.unref === "function") timer.unref();
-  console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); market-window gate retained`);
+  console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); context refresh ${refreshContext ? "on" : "off"}; market-window gate retained`);
 }
 
 const catalysts = createCatalystEngine({
@@ -215,28 +223,35 @@ const eia = createEiaEngine({
   onFreshRelevant: (items) => queueMarketRecheck(items, "EIA")
 });
 
+const ecb = createEcbEngine({
+  onFreshRelevant: (items) => queueMarketRecheck(items, "ECB", true)
+});
+
 function combinedCatalystState() {
   const policy = catalysts.getState();
   const energy = eia.getState();
-  const items = [...(policy.items || []), ...(energy.items || [])]
+  const euro = ecb.getState();
+  const items = [...(policy.items || []), ...(energy.items || []), ...(euro.items || [])]
     .sort((a, b) => new Date(b.detectedAt || b.publishedAt || 0).getTime() - new Date(a.detectedAt || a.publishedAt || 0).getTime())
-    .slice(0, 40);
-  const scanTimes = [policy.lastScanAt, energy.lastScanAt]
+    .slice(0, 50);
+  const scanTimes = [policy.lastScanAt, energy.lastScanAt, euro.lastScanAt]
     .filter(Boolean)
     .map((x) => new Date(x).getTime())
     .filter(Number.isFinite);
   return {
     items,
     lastScanAt: scanTimes.length ? new Date(Math.max(...scanTimes)).toISOString() : null,
-    sources: { ...(policy.sources || {}), ...(energy.sources || {}) },
-    focus: "commodity-relevant policy and official US energy releases",
+    sources: { ...(policy.sources || {}), ...(energy.sources || {}), ...(euro.sources || {}) },
+    focus: "commodity-relevant policy, official US energy releases and official ECB monetary-policy events",
     persistence: {
       policy: policy.persistence,
-      eia: energy.persistence
+      eia: energy.persistence,
+      ecb: euro.persistence
     },
     pollingMinutes: {
       ...(policy.pollingMinutes || {}),
-      eiaOfficial: energy.pollingMinutes
+      eiaOfficial: energy.pollingMinutes,
+      europeanCentralBank: euro.pollingMinutes
     }
   };
 }
@@ -260,10 +275,11 @@ function statusPayload() {
   const catalystState = combinedCatalystState();
   const policyState = catalysts.getState();
   const eiaState = eia.getState();
+  const ecbState = ecb.getState();
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.8.3",
+    version: "4.9.0",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -277,6 +293,8 @@ function statusPayload() {
       "administrative-catalyst-noise-filter",
       "direction-consistent-catalyst-confirmation",
       "official-eia-energy-catalysts",
+      "official-ecb-monetary-policy-events",
+      "ecb-event-context-refresh-without-blind-directional-bias",
       "restricted-directional-cross-market-confirmation",
       "influential-public-statements",
       "official-policy-catalysts",
@@ -304,17 +322,20 @@ function statusPayload() {
     marketDataMaxAgeMinutes: MARKET_DATA_MAX_AGE_MS / 60000,
     optionsMode: marketState.optionsMode,
     eiaPollingMinutes: eiaState.pollingMinutes,
+    ecbPollingMinutes: ecbState.pollingMinutes,
     lastCoreScanAt: marketState.lastCoreScanAt,
     lastContextScanAt: marketState.lastContextScanAt,
     lastCatalystScanAt: catalystState.lastScanAt,
     lastPolicyScanAt: policyState.lastScanAt,
     lastEiaScanAt: eiaState.lastScanAt,
+    lastEcbScanAt: ecbState.lastScanAt,
     lastOptionsScanAt: marketState.lastOptionsScanAt,
     lastAlertAt,
     journalStats: journalState.stats,
     journalPersistence: journalState.persistence,
     catalystPersistence: policyState.persistence,
     eiaPersistence: eiaState.persistence,
+    ecbPersistence: ecbState.persistence,
     calibration: journalState.calibration,
     sourceStatus: catalystState.sources,
     time: new Date().toISOString()
@@ -368,6 +389,7 @@ const server = http.createServer(async (req, res) => {
 
     if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, combinedCatalystState());
     if (requestUrl.pathname === "/api/eia") return sendJson(res, 200, eia.getState());
+    if (requestUrl.pathname === "/api/ecb") return sendJson(res, 200, ecb.getState());
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
 
     if (requestUrl.pathname === "/api/options") {
@@ -396,13 +418,15 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.8.3 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 v4.9.0 running on port ${PORT}`);
+  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
   console.log("777 extreme override: blocked on material day/velocity direction conflict");
-  console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}`);
+  console.log("777 ECB: official monetary-policy events trigger fresh context + commodity recheck; no blind ECB directional confirmation");
+  console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}; ECB ${ecb.getState().persistence}`);
   market.start();
   catalysts.start();
   eia.start();
+  ecb.start();
 });
