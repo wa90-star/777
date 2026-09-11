@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.8.1 - focused commodity runtime with duplicate-signal suppression
+// 777 Signal Radar Pro v4.8.2 - focused commodity runtime with stricter signal quality gates
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -11,8 +11,9 @@ const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const ALLOWED_QUOTES = new Set(["GLD", "SLV", "USO", "UNG", "COPX", "DBA", "SPY", "QQQ", "TLT", "UUP"]);
-const MARKET_REPEAT_SUPPRESS_MS = 8 * 60 * 60 * 1000;
+const MARKET_REPEAT_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 const MARKET_ESCALATION_MOVE_PCT = 2;
+const MARKET_DATA_MAX_AGE_MS = 30 * 60 * 1000;
 const marketDispatchHistory = new Map();
 const marketDispatchDecision = new Map();
 let lastMarketDispatchSent = true;
@@ -33,7 +34,18 @@ function telegramConfigured() {
   return Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID);
 }
 
+function shouldSuppressAdministrativeCatalyst(text) {
+  const raw = String(text || "");
+  if (!raw.startsWith("777 KATALYSATOR")) return false;
+  if (/senior executive service performance review board|performance review board membership/i.test(raw)) return true;
+  return /Richtung:\s*noch offen/i.test(raw) && /Treffer:\s*treasury\s*(?:\n|$)/i.test(raw);
+}
+
 async function sendTelegramMessage(text) {
+  if (shouldSuppressAdministrativeCatalyst(text)) {
+    console.log("777 administrative catalyst alert suppressed");
+    return { suppressed: true, reason: "administrative-catalyst-noise" };
+  }
   if (!telegramConfigured()) throw new Error("Telegram not configured");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -81,6 +93,14 @@ function marketSignalKey(meta) {
   return `${meta.symbol}:${meta.direction}`;
 }
 
+function marketDataFresh(meta) {
+  const live = market?.getState()?.core?.find((x) => x.symbol === meta.symbol);
+  const marketMs = new Date(live?.marketTime || "").getTime();
+  if (!Number.isFinite(marketMs)) return false;
+  const ageMs = Date.now() - marketMs;
+  return ageMs >= -5 * 60 * 1000 && ageMs <= MARKET_DATA_MAX_AGE_MS;
+}
+
 function priorMarketDispatch(meta) {
   const key = marketSignalKey(meta);
   const memory = marketDispatchHistory.get(key) || null;
@@ -101,7 +121,6 @@ function shouldDispatchMarketAlert(meta) {
   const prior = priorMarketDispatch(meta);
   if (!prior) return true;
   if (meta.confirmations > Number(prior.confirmations || 1)) return true;
-  if (meta.score >= Number(prior.score || 0) + 15) return true;
   if (Math.abs(meta.dayMove) >= Math.abs(Number(prior.dayMove || 0)) + MARKET_ESCALATION_MOVE_PCT) return true;
   const priorTypes = new Set(Array.isArray(prior.types) ? prior.types : []);
   if (meta.types.some((type) => !priorTypes.has(type))) return true;
@@ -115,6 +134,12 @@ async function sendMarketTelegramMessage(text) {
     return sendTelegramMessage(text);
   }
   const key = marketSignalKey(meta);
+  if (!marketDataFresh(meta)) {
+    marketDispatchDecision.set(key, { sent: false, at: Date.now() });
+    lastMarketDispatchSent = false;
+    console.log(`777 stale market alert suppressed: ${key}`);
+    return { suppressed: true, reason: "stale-market-data" };
+  }
   const sent = shouldDispatchMarketAlert(meta);
   marketDispatchDecision.set(key, { sent, at: Date.now() });
   lastMarketDispatchSent = sent;
@@ -216,7 +241,7 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.8.1",
+    version: "4.8.2",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -224,7 +249,9 @@ function statusPayload() {
       "commodity-price-anomalies",
       "correlation-gate-2-independent-confirmations",
       "extreme-commodity-override-for-gld-slv-uso-ung",
-      "duplicate-signal-suppression-8h-with-material-escalation",
+      "duplicate-signal-suppression-24h-with-confirmation-type-or-move-escalation",
+      "stale-market-data-alert-block-30m",
+      "administrative-catalyst-noise-filter",
       "direction-consistent-catalyst-confirmation",
       "official-eia-energy-catalysts",
       "restricted-directional-cross-market-confirmation",
@@ -251,6 +278,7 @@ function statusPayload() {
     extremeDayMultiplier: marketState.extremeDayMultiplier,
     extremeVelocityMultiplier: marketState.extremeVelocityMultiplier,
     marketRepeatSuppressHours: MARKET_REPEAT_SUPPRESS_MS / 3600000,
+    marketDataMaxAgeMinutes: MARKET_DATA_MAX_AGE_MS / 60000,
     optionsMode: marketState.optionsMode,
     eiaPollingMinutes: eiaState.pollingMinutes,
     lastCoreScanAt: marketState.lastCoreScanAt,
@@ -345,9 +373,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.8.1 running on port ${PORT}`);
+  console.log(`777 v4.8.2 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
-  console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmation/score/move materially escalates`);
+  console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
+  console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}`);
   market.start();
   catalysts.start();
