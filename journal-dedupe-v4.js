@@ -4,9 +4,8 @@ const path = require("path");
 
 const DATA_DIR = process.env.RADAR_DATA_DIR || "/data";
 const JOURNAL_FILE = path.join(DATA_DIR, "signal-journal.json");
-const BACKUP_FILE = path.join(DATA_DIR, "signal-journal.pre-v481-dedupe.json");
-const WINDOW_MS = 8 * 60 * 60 * 1000;
-const SCORE_ESCALATION = 15;
+const BACKUP_FILE = path.join(DATA_DIR, "signal-journal.pre-v482-dedupe.json");
+const WINDOW_MS = 24 * 60 * 60 * 1000;
 const MOVE_ESCALATION_PCT = 2;
 
 function safeTime(value) {
@@ -20,7 +19,6 @@ function types(entry) {
 
 function materiallyEscalated(next, prior) {
   if (Number(next?.correlationCount || 0) > Number(prior?.correlationCount || 0)) return true;
-  if (Number(next?.score || 0) >= Number(prior?.score || 0) + SCORE_ESCALATION) return true;
   if (Math.abs(Number(next?.percentChangeAtAlert || 0)) >= Math.abs(Number(prior?.percentChangeAtAlert || 0)) + MOVE_ESCALATION_PCT) return true;
   const priorTypes = new Set(types(prior));
   return types(next).some((type) => !priorTypes.has(type));
