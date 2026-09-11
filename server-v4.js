@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.8 - focused commodity runtime with duplicate-signal suppression
+// 777 Signal Radar Pro v4.8.1 - focused commodity runtime with duplicate-signal suppression
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -55,7 +55,7 @@ async function sendTelegramMessage(text) {
 function parseMarketAlert(text) {
   const raw = String(text || "");
   if (!raw.startsWith("777 EXTREMES ROHSTOFF-SIGNAL") && !raw.startsWith("777 KORRELIERTES ROHSTOFF-SIGNAL")) return null;
-  const signal = raw.match(/\n\n(LONG|SHORT)\s+.+?\s+\(([A-Z.]+)\)/);
+  const signal = raw.match(/\r?\n+(LONG|SHORT)\s+.+?\s+\(([A-Z.]+)\)/);
   if (!signal) return null;
   const score = raw.match(/Score:\s*(\d+)\/100/);
   const confirmations = raw.match(/Bestätigungen:\s*(\d+)\/(\d+)/);
@@ -216,7 +216,7 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.8",
+    version: "4.8.1",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -345,7 +345,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.8 running on port ${PORT}`);
+  console.log(`777 v4.8.1 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmation/score/move materially escalates`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}`);
