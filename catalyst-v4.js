@@ -295,6 +295,21 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     return JSON.parse(text);
   }
 
+  async function getTextWithRetry(url, attempts = 3, timeout = 9000, headers = {}) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await getText(url, timeout, headers);
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** (attempt - 1))));
+        }
+      }
+    }
+    throw lastError;
+  }
+
   function pruneSeen() {
     const cutoff = Date.now() - SEEN_MAX_AGE_MS;
     for (const [key, value] of seen.entries()) {
@@ -396,8 +411,29 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 
   async function scanFed() {
     try {
-      const xml = await getText("https://www.federalreserve.gov/feeds/press_all.xml");
-      const items = rssItems(xml).slice(0, 20).map((x) => ({
+      let feedItems;
+      try {
+        const xml = await getTextWithRetry("https://www.federalreserve.gov/feeds/press_all.xml");
+        feedItems = rssItems(xml);
+      } catch (primaryError) {
+        console.warn("777 Fed aggregate feed unavailable; trying official category feeds:", primaryError.message);
+        const fallbackUrls = [
+          "https://www.federalreserve.gov/feeds/press_monetary.xml",
+          "https://www.federalreserve.gov/feeds/press_other.xml",
+          "https://www.federalreserve.gov/feeds/press_bcreg.xml"
+        ];
+        const results = await Promise.allSettled(
+          fallbackUrls.map((url) => getTextWithRetry(url, 2))
+        );
+        feedItems = results
+          .filter((result) => result.status === "fulfilled")
+          .flatMap((result) => rssItems(result.value));
+        if (!feedItems.length) throw primaryError;
+      }
+      const unique = new Map(feedItems.map((item) => [item.url || item.title, item]));
+      const items = [...unique.values()]
+        .sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0))
+        .slice(0, 20).map((x) => ({
         id: `fed:${x.url || x.title}`,
         source: "Federal Reserve · official",
         title: x.title,
