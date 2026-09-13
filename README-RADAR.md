@@ -10,7 +10,8 @@
 - Persistent signal journal: `signal-journal-v4.js` -> `/data/signal-journal.json`
 - Dashboard: `public/dashboard-v4.html`
 - Primary market data: Alpaca IEX
-- Market-data fallback: Twelve Data
+- Market-data fallback: Twelve Data after bounded Alpaca retries
+- Federal Reserve: aggregate official feed with official category-feed fallback
 - Alerts: Telegram
 - Core symbols: GLD, SLV, USO, UNG, COPX, DBA
 - Context only: SPY, QQQ, TLT, UUP

@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.9.0 - focused commodity runtime with official ECB event monitoring
+// 777 Signal Radar Pro v4.9.1 - resilient market scans and official-source fallbacks
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -279,7 +279,7 @@ function statusPayload() {
   const journalState = journal.getState();
   return {
     system: "777",
-    version: "4.9.0",
+    version: "4.9.1",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -298,6 +298,8 @@ function statusPayload() {
       "restricted-directional-cross-market-confirmation",
       "influential-public-statements",
       "official-policy-catalysts",
+      "fed-aggregate-feed-with-official-category-fallbacks",
+      "market-snapshot-retries-with-twelve-data-fallback",
       "directional-options-confirmation",
       "persistent-30m-2h-outcome-journal",
       "event-driven-market-recheck-inside-market-window",
