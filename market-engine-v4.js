@@ -42,6 +42,10 @@ function timeoutSignal(ms) {
   return { signal: controller.signal, clear: () => clearTimeout(timer) };
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function num(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -143,8 +147,44 @@ function createMarketEngine({
 
   async function fetchSnapshots(symbols) {
     const params = new URLSearchParams({ symbols: symbols.join(","), feed: "iex", currency: "USD" });
-    const data = await alpacaJson(`https://data.alpaca.markets/v2/stocks/snapshots?${params}`);
-    return data.snapshots || data;
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const data = await alpacaJson(`https://data.alpaca.markets/v2/stocks/snapshots?${params}`, 12000);
+        return data.snapshots || data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await delay(750 * (2 ** (attempt - 1)));
+      }
+    }
+
+    if (!twelveKey) throw lastError;
+    console.warn(`777 Alpaca snapshot retries exhausted; using Twelve Data fallback: ${lastError.message}`);
+    const pairs = await Promise.all(symbols.map(async (symbol) => {
+      const t = timeoutSignal(10000);
+      try {
+        const response = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(twelveKey)}`, { signal: t.signal });
+        const data = await response.json();
+        if (!response.ok || data.status === "error" || data.code) throw new Error(data.message || `Twelve Data HTTP ${response.status}`);
+        const price = num(data.close);
+        const previousClose = num(data.previous_close);
+        if (!price || !previousClose) throw new Error(`Incomplete Twelve Data quote for ${symbol}`);
+        return [symbol, {
+          __source: "Twelve Data fallback",
+          latestTrade: { p: price, t: data.datetime || new Date().toISOString() },
+          dailyBar: { c: price, h: num(data.high) || price, l: num(data.low) || price },
+          prevDailyBar: { c: previousClose }
+        }];
+      } catch (error) {
+        console.error(`777 Twelve Data fallback failed for ${symbol}:`, error.message);
+        return null;
+      } finally {
+        t.clear();
+      }
+    }));
+    const snapshots = Object.fromEntries(pairs.filter(Boolean));
+    if (!Object.keys(snapshots).length) throw lastError;
+    return snapshots;
   }
 
   function analyze(symbol, snapshot, config, kind) {
@@ -209,7 +249,7 @@ function createMarketEngine({
       priority,
       extreme,
       extremeReason,
-      source: "Alpaca IEX",
+      source: snapshot.__source || "Alpaca IEX",
       marketTime: latestTrade?.t ?? latestTrade?.timestamp ?? daily.t ?? daily.timestamp ?? null
     };
   }
