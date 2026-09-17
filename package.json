@@ -1,8 +1,9 @@
 {
   "name": "777-signal-radar-pro",
-  "version": "4.9.1",
+  "version": "5.0.0-rc1",
   "private": true,
   "scripts": {
+    "test": "node decision-engine-v5.test.js",
     "start": "node server-v4.js"
   },
   "engines": {
