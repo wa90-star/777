@@ -1,0 +1,13 @@
+const assert = require('assert');
+const d = require('./decision-engine-v5');
+const now = Date.now();
+const q = { bid:100, ask:100.1, last:100.05, quoteTime:new Date(now).toISOString(), phase:'regular' };
+const base = { newInformation:true, material:true, expectationChanging:true, transmissionChannel:'policy->asset', direction:'LONG', novelty:2, materiality:2, surprise:true, independentConfirmation:true, marketConfirmation:true, timing:true, confidence:'HIGH', confirmationCategories:['primary','market'], moveConsumedPct:25 };
+assert.equal(d.decide(base,q,now).pass,true);
+assert.equal(d.decide({...base,newInformation:false},q,now).pass,false);
+assert.equal(d.decide({...base,moveConsumedPct:90},q,now).antiLate.status,'ZU_SPAET');
+assert.equal(d.decide(base,{...q,bid:99,ask:102},now).pass,false);
+assert.equal(d.decide({...base,wave2:true,retestOrConsolidation:true,renewedExpansion:true,newIndependentConfirmation:false},q,now).pass,false);
+assert.equal(d.decide({...base,equalStrengthCounterSignal:true},q,now).pass,false);
+assert.equal(d.score9(base).total,9);
+console.log('decision-engine-v5 tests PASS');
