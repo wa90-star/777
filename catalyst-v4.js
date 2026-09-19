@@ -28,6 +28,8 @@ const POLL = {
 
 const DISPLAY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const SEEN_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+const TRUMP_OUTAGE_GRACE_MS = 10 * 60 * 1000;
+const TRUMP_OUTAGE_REPEAT_MS = 6 * 60 * 60 * 1000;
 
 function timeoutSignal(ms) {
   const controller = new AbortController();
@@ -65,6 +67,36 @@ function rssItems(xml) {
     publishedAt: xmlTag(m[0], "pubDate") || null,
     description: xmlTag(m[0], "description")
   }));
+}
+
+function normalizeOfficialTrumpPosts(data) {
+  return (Array.isArray(data) ? data : []).map((post) => {
+    const original = post?.reblog || post || {};
+    const id = post?.id || original.id;
+    const text = stripHtml(original.content || post?.content);
+    return {
+      id: id ? `truth:${id}` : null,
+      source: "Donald Trump · Truth Social official",
+      title: text,
+      text,
+      url: post?.url || original.url || (id ? `https://truthsocial.com/@realDonaldTrump/${id}` : ""),
+      publishedAt: post?.created_at || original.created_at || null
+    };
+  }).filter((item) => item.id && item.title);
+}
+
+function normalizeTrumpFmPosts(data) {
+  return (Array.isArray(data?.data) ? data.data : []).map((post) => {
+    const text = stripHtml(post.content);
+    return {
+      id: post.id ? `truth:${post.id}` : null,
+      source: "Donald Trump · Truth Social mirror fallback",
+      title: text,
+      text,
+      url: post.id ? `https://truthsocial.com/@realDonaldTrump/${post.id}` : "",
+      publishedAt: post.createdAt || null
+    };
+  }).filter((item) => item.id && item.title);
 }
 
 function hasAny(text, phrases) {
@@ -186,7 +218,7 @@ function classify(item, baseScore) {
   };
 }
 
-function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant }) {
+function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, onTrumpPost }) {
   const seen = new Map();
   const primed = new Set();
   const preferredDir = process.env.RADAR_DATA_DIR || "/data";
@@ -196,6 +228,14 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
   const state = {
     items: [],
     lastScanAt: null,
+    trumpFeedHealth: {
+      lastSuccessAt: null,
+      failureStartedAt: null,
+      consecutiveFailures: 0,
+      outageAlerted: false,
+      lastOutageAlertAt: null,
+      lastRecoveryAt: null
+    },
     sources: {
       trumpTruth: { ok: null, lastScanAt: null, error: null },
       federalReserve: { ok: null, lastScanAt: null, error: null },
@@ -230,7 +270,8 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         savedAt: new Date().toISOString(),
         seen: [...seen.entries()],
         primed: [...primed],
-        items: state.items.slice(0, 30)
+        items: state.items.slice(0, 30),
+        trumpFeedHealth: state.trumpFeedHealth
       }, null, 2));
       fs.renameSync(tmp, storageFile);
     } catch (error) {
@@ -246,7 +287,11 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       for (const pair of parsed.seen || []) {
         if (!Array.isArray(pair) || pair.length !== 2) continue;
         const ts = Number(pair[1]);
-        if (Number.isFinite(ts) && ts >= cutoff) seen.set(pair[0], ts);
+        if (Number.isFinite(ts) && ts >= cutoff) {
+          const key = String(pair[0]);
+          seen.set(key, ts);
+          if (key.startsWith("trump:")) seen.set(`truth:${key.slice("trump:".length)}`, ts);
+        }
       }
       for (const key of parsed.primed || []) primed.add(key);
       state.items = (Array.isArray(parsed.items) ? parsed.items : [])
@@ -256,6 +301,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
           directionalBiases: inferDirectionalBiases(`${x.title || ""} ${x.text || ""}`)
         }))
         .slice(0, 30);
+      state.trumpFeedHealth = { ...state.trumpFeedHealth, ...(parsed.trumpFeedHealth || {}) };
       persistState();
       console.log(`777 catalyst state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
@@ -270,6 +316,64 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       error: error ? String(error).slice(0, 160) : null
     };
     state.lastScanAt = new Date().toISOString();
+  }
+
+  async function markTrumpSource(ok, error = null, metadata = {}) {
+    const timestamp = Date.now();
+    const iso = new Date(timestamp).toISOString();
+    const health = state.trumpFeedHealth;
+    markSource("trumpTruth", ok, error);
+    state.sources.trumpTruth = { ...state.sources.trumpTruth, ...metadata };
+
+    if (ok) {
+      const shouldReportRecovery = health.outageAlerted;
+      const failureStartedAt = health.failureStartedAt;
+      health.lastSuccessAt = iso;
+      health.failureStartedAt = null;
+      health.consecutiveFailures = 0;
+      health.outageAlerted = false;
+      if (shouldReportRecovery) {
+        health.lastRecoveryAt = iso;
+        if (telegramConfigured()) {
+          const minutes = Math.max(1, Math.round((timestamp - new Date(failureStartedAt || timestamp).getTime()) / 60000));
+          try {
+            await sendMessage([
+              "777 TRUMP-QUELLE WIEDERHERGESTELLT",
+              "",
+              `Der öffentliche Truth-Social-Feed ist nach rund ${minutes} Minuten wieder erreichbar.`,
+              `Zeit: ${iso}`
+            ].join("\n"));
+          } catch (sendError) {
+            console.error("777 Trump source recovery alert failed:", sendError.message);
+          }
+        }
+      }
+      persistState();
+      return;
+    }
+
+    health.consecutiveFailures += 1;
+    if (!health.failureStartedAt) health.failureStartedAt = iso;
+    const failureAge = timestamp - new Date(health.failureStartedAt).getTime();
+    const lastAlert = new Date(health.lastOutageAlertAt || 0).getTime();
+    if (failureAge >= TRUMP_OUTAGE_GRACE_MS && (!Number.isFinite(lastAlert) || timestamp - lastAlert >= TRUMP_OUTAGE_REPEAT_MS)) {
+      health.outageAlerted = true;
+      health.lastOutageAlertAt = iso;
+      if (telegramConfigured()) {
+        try {
+          await sendMessage([
+            "777 TRUMP-QUELLE GESTÖRT",
+            "",
+            "Der öffentliche Truth-Social-Feed ist seit mindestens zehn Minuten nicht zuverlässig erreichbar.",
+            `Fehler: ${String(error || "keine Detailmeldung").slice(0, 180)}`,
+            "Öl-Orderflow wird weiter gemessen, aber neue Posts können während der Störung verspätet verknüpft werden."
+          ].join("\n"));
+        } catch (sendError) {
+          console.error("777 Trump source outage alert failed:", sendError.message);
+        }
+      }
+    }
+    persistState();
   }
 
   async function getText(url, timeout = 9000, headers = {}) {
@@ -338,7 +442,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       if (normalized.length) state.items = [...normalized, ...state.items].slice(0, 30);
       persistState();
       console.log(`777 catalyst source primed: ${sourceKey}, ${normalized.length} recent relevant`);
-      return;
+      return { fresh: [], alerts: [] };
     }
 
     const fresh = normalized
@@ -372,6 +476,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         }
       }
     }
+    return { fresh, alerts };
   }
 
   function formatAlert(item) {
@@ -391,20 +496,31 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 
   async function scanTrump() {
     try {
-      const data = await getJson("https://trump.fm/api/posts?limit=10&platform=truth&includeDeleted=false", 9000);
-      const posts = Array.isArray(data?.data) ? data.data : [];
-      const items = posts.map((p) => ({
-        id: `trump:${p.id}`,
-        source: "Donald Trump · Truth Social mirror",
-        title: stripHtml(p.content),
-        text: stripHtml(p.content),
-        url: p.id ? `https://trump.fm/post/${p.id}` : "",
-        publishedAt: p.createdAt || null
-      })).filter((x) => x.title);
-      await accept("trump", items, 70);
-      markSource("trumpTruth", true);
+      let items;
+      let endpoint = "official";
+      let warning = null;
+      try {
+        const official = await getJson("https://truthsocial.com/api/v1/accounts/107780257626128497/statuses?limit=10&exclude_replies=true", 9000);
+        items = normalizeOfficialTrumpPosts(official);
+        if (!items.length) throw new Error("official endpoint returned no posts");
+      } catch (officialError) {
+        endpoint = "mirror-fallback";
+        warning = `Official endpoint unavailable: ${officialError.message}`;
+        const fallback = await getJson("https://trump.fm/api/posts?limit=10&platform=truth&includeDeleted=false", 9000);
+        items = normalizeTrumpFmPosts(fallback);
+        if (!items.length) throw new Error(`${warning}; mirror returned no posts`);
+      }
+      const accepted = await accept("trump", items, 70);
+      for (const item of accepted.fresh || []) {
+        try {
+          await onTrumpPost?.(item);
+        } catch (error) {
+          console.error("777 Trump oil callback failed:", error.message);
+        }
+      }
+      await markTrumpSource(true, null, { endpoint, warning });
     } catch (error) {
-      markSource("trumpTruth", false, error.message);
+      await markTrumpSource(false, error.message, { endpoint: "unavailable", warning: null });
       console.error("777 Trump source error:", error.message);
     }
   }
@@ -549,6 +665,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       focus: "commodity-relevant influential statements and official policy",
       displayMaxAgeDays: DISPLAY_MAX_AGE_MS / 86400000,
       persistence: persistenceMode,
+      trumpFeedHealth: { ...state.trumpFeedHealth },
       pollingMinutes: {
         trumpTruth: POLL.trump / 60000,
         federalReserve: POLL.fed / 60000,
@@ -561,3 +678,4 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 }
 
 module.exports = createCatalystEngine;
+module.exports._test = { normalizeOfficialTrumpPosts, normalizeTrumpFmPosts };
