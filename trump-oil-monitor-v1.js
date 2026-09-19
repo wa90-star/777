@@ -17,6 +17,8 @@ const POST_LOOKBACK_MS = 45 * 60 * 1000;
 const POST_FORWARD_MS = 30 * 60 * 1000;
 const CATALYST_LOOKBACK_MS = 30 * 60 * 1000;
 const HEALTH_GRACE_MS = 5 * 60 * 1000;
+const STARTUP_HEALTH_GRACE_MS = 10 * 60 * 1000;
+const HEALTH_REPEAT_MS = 6 * 60 * 60 * 1000;
 const OUTCOME_GRACE_MS = 5 * 60 * 1000;
 const FOLLOW_THROUGH_BPS = 2;
 const MIN_OUTCOMES_FOR_REVIEW = 30;
@@ -303,10 +305,12 @@ function createTrumpOilMonitor({
   }
 
   function scheduleHealthAlert() {
-    if (!everAuthenticated || healthTimer) return;
+    if (!state.provider?.configured || healthTimer) return;
+    if (healthIncidentOpen && now() - lastHealthAlertAt < HEALTH_REPEAT_MS) return;
+    const graceMs = everAuthenticated ? HEALTH_GRACE_MS : STARTUP_HEALTH_GRACE_MS;
     healthTimer = setTimeout(async () => {
       healthTimer = null;
-      if (state.provider?.authenticated || now() - lastHealthAlertAt < HEALTH_GRACE_MS) return;
+      if (state.provider?.authenticated || now() - lastHealthAlertAt < graceMs) return;
       healthIncidentOpen = true;
       lastHealthAlertAt = now();
       if (!telegramConfigured?.()) return;
@@ -314,7 +318,7 @@ function createTrumpOilMonitor({
         await sendMessage([
           "777 DATENQUELLE GESTÖRT",
           "",
-          "Massive Futures liefert seit mindestens fünf Minuten keinen authentifizierten Live-Stream.",
+          `Massive Futures liefert seit mindestens ${Math.round(graceMs / 60000)} Minuten keinen authentifizierten Live-Stream.`,
           `Status: ${state.provider?.connection || "unbekannt"}`,
           `Fehler: ${state.provider?.lastError || "keine Detailmeldung"}`,
           "Während der Störung werden keine Orderflow-Alarme ausgegeben."

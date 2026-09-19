@@ -39,7 +39,7 @@
 - Clusters oil-related Trump posts within 30 minutes into one post burst, so a rapid sequence of posts cannot repeatedly confirm the same market incident.
 - Tracks one primary outcome per incident after 30 and 120 minutes. Thresholds remain fixed until at least 30 valid 120-minute outcomes can be reviewed.
 - Persists baselines, posts, anomalies, incidents, outcomes and counters for 45 days across deploys/restarts.
-- Alerts Telegram if the Massive stream remains unavailable for five minutes after having been live, and sends a recovery notice.
+- Alerts Telegram if the Massive stream remains unavailable for five minutes after having been live, or for ten minutes during startup, and sends a recovery notice. Repeated outage notices are limited to one every six hours.
 
 The production monitor needs Massive Futures Advanced. The Basic plan does not provide real-time WebSocket trades/quotes; Starter has delayed aggregates, and Developer remains delayed. Without Advanced the service stays visible as offline and emits no pseudo-live anomaly alerts.
 
