@@ -2,7 +2,24 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile"
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": [
+      "/server-v4.js",
+      "/market-engine-v4.js",
+      "/catalyst-v4.js",
+      "/eia-v4.js",
+      "/ecb-v4.js",
+      "/signal-journal-v4.js",
+      "/journal-dedupe-v4.js",
+      "/alpaca-oil-proxy-v1.js",
+      "/massive-futures-v1.js",
+      "/trump-oil-monitor-v1.js",
+      "/public/dashboard-v4.html",
+      "/package.json",
+      "/Dockerfile",
+      "/compose.yaml",
+      "/railway.json"
+    ]
   },
   "environments": {
     "production": {
