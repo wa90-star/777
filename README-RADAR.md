@@ -4,6 +4,7 @@
 
 - Railway service: `chic-caring`
 - Host-independent runtime: `Dockerfile` and `compose.yaml`; Railway is the current instance, not a permanent dependency
+- Railway build configuration: `railway.json` pins the Dockerfile and the non-Metal V2 fallback build environment
 - Free failover guide: `ops/FREE-HOSTING.md`
 - Independent public-repository watchdog: `.github/workflows/radar-health.yml`
 - Runtime: `server-v4.js`
