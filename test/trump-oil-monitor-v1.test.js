@@ -15,7 +15,8 @@ function fakeProviderFactory(control) {
       contracts: {
         CL: { productCode: "CL", ticker: "CLX6" },
         BZ: { productCode: "BZ", ticker: "BZX6" }
-      }
+      },
+      ...(control.providerState || {})
     };
     return {
       start: async () => onStatus(providerState),
@@ -362,5 +363,46 @@ test("deduplicates several Trump oil posts in the same burst", async (t) => {
   assert.notEqual(second.burstId, third.burstId);
   assert.equal(state.metrics.confirmedPostLinks, 1);
   assert.equal(messages.filter((message) => /TRUMP-ÖL-EREIGNIS BESTÄTIGT/.test(message)).length, 1);
+  monitor.stop();
+});
+
+test("labels free IEX proxy incidents and keeps their calibration scope separate", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "oil-proxy-scope-test-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const messages = [];
+  const clock = Date.parse("2026-09-18T14:00:00Z");
+  const control = {
+    providerState: {
+      provider: "alpaca",
+      source: "alpaca-iex-oil-etf-proxy",
+      mode: "free-proxy",
+      instrumentType: "etf-proxy",
+      contracts: {
+        CL: { productCode: "CL", ticker: "USO", displayName: "WTI-Proxy (USO ETF)" },
+        BZ: { productCode: "BZ", ticker: "BNO", displayName: "Brent-Proxy (BNO ETF)" }
+      }
+    }
+  };
+  const monitor = createTrumpOilMonitor({
+    sendMessage: async (text) => messages.push(text),
+    telegramConfigured: () => true,
+    getPublicCatalysts: () => ({ items: [] }),
+    dataDir: tempDir,
+    now: () => clock,
+    providerFactory: fakeProviderFactory(control)
+  });
+  await monitor.start();
+
+  const features = syntheticFeatures("CL", clock, 80);
+  features.ticker = "USO";
+  monitor._test.recordAnomaly(monitor._test.state.products.CL, features, syntheticScore("LONG"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const state = monitor.getState();
+  assert.equal(state.dataScope, "free-etf-proxy-iex");
+  assert.equal(state.incidents[0].dataScope, "free-etf-proxy-iex");
+  assert.equal(state.calibration.dataScope, "free-etf-proxy-iex");
+  assert.match(messages.join("\n"), /ÖL-PROXY-FLOWALARM/);
+  assert.match(messages.join("\n"), /kein vollständiger WTI-\/Brent-Futures-Orderflow/);
   monitor.stop();
 });

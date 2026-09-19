@@ -8,15 +8,17 @@
 - Policy/social catalyst engine: `catalyst-v4.js`
 - Official EIA engine: `eia-v4.js`
 - Persistent signal journal: `signal-journal-v4.js` -> `/data/signal-journal.json`
-- Futures provider: `massive-futures-v1.js`
+- Free oil-proxy provider: `alpaca-oil-proxy-v1.js`
+- Optional futures provider: `massive-futures-v1.js`
 - Trump/oil anomaly engine: `trump-oil-monitor-v1.js` -> `/data/trump-oil-monitor.json`
 - Dashboard: `public/dashboard-v4.html`
 - Primary market data: Alpaca IEX
 - Market-data fallback: Twelve Data after bounded Alpaca retries
 - Federal Reserve: aggregate official feed with official category-feed fallback
 - Alerts: Telegram
-- Futures data: Massive Futures Advanced, real-time trades, top-of-book quotes and aggregates
-- Futures contracts: automatically rolled WTI (`CL`) and Brent (`BZ`) front contracts, avoiding the final five maturity days when possible
+- Oil data: the default `free-proxy` mode uses the existing free Alpaca IEX connection for USO and BNO. The optional futures source is enabled only with `OIL_DATA_MODE=massive` and a compatible `MASSIVE_API_KEY`.
+- Free-mode instruments: USO as a WTI proxy and BNO as a Brent proxy. Both are explicitly labeled as ETF proxies and never presented as futures.
+- Optional futures contracts: automatically rolled WTI (`CL`) and Brent (`BZ`) front contracts, avoiding the final five maturity days when possible
 - Core symbols: GLD, SLV, USO, UNG, COPX, DBA
 - Context only: SPY, QQQ, TLT, UUP
 - Core scan: 5 minutes during US extended market window (07:00-20:00 America/New_York, weekdays)
@@ -29,7 +31,9 @@
 ## Trump/oil monitor
 
 - Polls Donald Trump's public Truth Social account every 2 minutes through the official public account endpoint, with a mirror used only as a marked fallback, and only admits oil-relevant posts to the event linker.
-- Consumes real-time WTI and Brent futures trades and best bid/offer updates over a persistent WebSocket.
+- In the no-cost production mode, consumes real-time IEX trades and best bid/offer updates for USO and BNO over one persistent Alpaca WebSocket.
+- The free feed is an exchange subset and follows US equity extended hours. It cannot observe the full WTI/Brent futures market or futures trading outside those hours.
+- If `OIL_DATA_MODE=massive` and a compatible `MASSIVE_API_KEY` are supplied later, the same incident engine switches to real WTI and Brent futures. Stored proxy and futures baselines and calibration samples remain separated.
 - Builds one-minute features for price return, intraminute range, volume, trade count, aggressor-side volume imbalance, quote order-flow imbalance and spread.
 - Uses robust median/MAD baselines by 15-minute time-of-day slot. Price history is bootstrapped from 21 days of one-minute aggregates; microstructure alerts remain disabled until at least 120 live minutes exist.
 - Requires an extreme price/activity component, an extreme microstructure component and directional agreement from at least two of return, trade imbalance and quote order flow.
@@ -39,13 +43,13 @@
 - Clusters oil-related Trump posts within 30 minutes into one post burst, so a rapid sequence of posts cannot repeatedly confirm the same market incident.
 - Tracks one primary outcome per incident after 30 and 120 minutes. Thresholds remain fixed until at least 30 valid 120-minute outcomes can be reviewed.
 - Persists baselines, posts, anomalies, incidents, outcomes and counters for 45 days across deploys/restarts.
-- Alerts Telegram if the Massive stream remains unavailable for five minutes after having been live, or for ten minutes during startup, and sends a recovery notice. Repeated outage notices are limited to one every six hours.
+- Alerts Telegram if the selected stream remains unavailable for five minutes after having been live, or for ten minutes during startup, and sends a recovery notice. Repeated outage notices are limited to one every six hours.
 
-The production monitor needs Massive Futures Advanced. The Basic plan does not provide real-time WebSocket trades/quotes; Starter has delayed aggregates, and Developer remains delayed. Without Advanced the service stays visible as offline and emits no pseudo-live anomaly alerts.
+The default production monitor has no additional data fee. It uses the already configured Alpaca Basic IEX feed. Massive Basic remains useful for historical futures research but does not provide the real-time futures trades and quotes required by the stronger futures mode. The service therefore never labels the free ETF mode as futures order flow.
 
 ## Alert contract
 
-Every futures alert includes the contract, direction, score, basis-point move, volume/trade Z-scores, trade-imbalance Z-score, quote-OFI Z-score, effective baseline counts, event window and any linked post or known public catalyst. No alert is presented as a buy/sell instruction.
+Every oil alert includes the instrument, data scope, direction, score, basis-point move, volume/trade Z-scores, trade-imbalance Z-score, quote-OFI Z-score, effective baseline counts, event window and any linked post or known public catalyst. No alert is presented as a buy/sell instruction. Free-mode Telegram alerts state that USO/BNO and IEX are proxies with limited market coverage.
 
 The audit of the prior April event study and the reasons its headline result is not treated as a valid signal are documented in `ANALYSIS-VALIDATION.md`.
 
@@ -63,6 +67,7 @@ Google Sheet: `SIGNAL_RADAR_MASTER_LOG`
 - Do not use general news as the primary trigger when an official/primary source exists.
 - Avoid duplicate alerts and startup alerts.
 - Do not auto-tune production thresholds before sufficient samples exist.
-- Do not emit a futures anomaly until both price and live microstructure baselines meet their minimum sample counts.
+- Do not emit an oil anomaly until both price and live microstructure baselines meet their minimum sample counts.
+- Never mix proxy and futures baselines or describe USO/BNO observations as WTI/Brent futures activity.
 - Do not describe temporal proximity to a post as proof of causation, coordination or insider trading.
 - Do not commit API keys, bot tokens, chat IDs, or other secrets. Secrets stay in Railway variables.

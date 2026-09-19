@@ -17,7 +17,7 @@
 </head>
 <body>
 <main>
-<header class="hero"><h1 class="logo">777</h1><div class="subtitle">Signal Radar Pro</div><div class="focus">WTI & Brent Orderflow · Trump-Posts · Statistische Auffälligkeiten · Keine automatische Ausführung</div></header>
+<header class="hero"><h1 class="logo">777</h1><div class="subtitle">Signal Radar Pro</div><div class="focus">Öl-Mikrostruktur · Trump-Posts · Statistische Auffälligkeiten · Keine automatische Ausführung</div></header>
 <div class="statusbar"><div class="statusleft"><span id="dot" class="dot"></span><span id="system">System wird geprüft</span></div><div id="clock" class="small">—</div></div>
 <div class="metrics">
   <div class="metric"><div class="k">Kern-Radar</div><div id="coreRate" class="v">—</div></div>
@@ -25,7 +25,7 @@
   <div class="metric"><div class="k">Telegram</div><div id="telegram" class="v">—</div></div>
   <div class="metric"><div class="k">Letzter Alert</div><div id="lastAlert" class="v">—</div></div>
 </div>
-<section class="section"><div class="head"><h2>Trump-Öl-Anomalie-Monitor</h2><span id="oilBadge" class="badge">STARTET</span></div><div id="oilProducts" class="oilgrid"><div class="empty">Futures-Feed und Baselines werden geprüft…</div></div><div id="oilCalibration" class="oilcal"></div><div id="oilAnomalies" class="anomalies"></div><div class="notice">Mehrere auffällige Minuten und mehrere Posts innerhalb von 30 Minuten werden zu einem Marktvorfall zusammengefasst. Der Monitor prüft echte WTI- und Brent-Futures und misst die Entwicklung nach 30 und 120 Minuten. Eine Auffälligkeit ist kein Beweis für Insiderhandel und kein automatisches Handelssignal.</div></section>
+<section class="section"><div class="head"><h2>Trump-Öl-Anomalie-Monitor</h2><span id="oilBadge" class="badge">STARTET</span></div><div id="oilProducts" class="oilgrid"><div class="empty">Datenquelle und Baselines werden geprüft…</div></div><div id="oilCalibration" class="oilcal"></div><div id="oilAnomalies" class="anomalies"></div><div id="oilNotice" class="notice">Mehrere auffällige Minuten und mehrere Posts innerhalb von 30 Minuten werden zu einem Marktvorfall zusammengefasst. Eine Auffälligkeit ist kein Beweis für Insiderhandel und kein automatisches Handelssignal.</div></section>
 <section class="section"><div class="head"><h2>Rohstoff-Radar</h2><span id="coreTime" class="badge">LÄDT</span></div><div id="core" class="rows"><div class="empty">Scanner startet…</div></div></section>
 <section class="section"><div class="head"><h2>Korrelationsfilter & Trefferkontrolle</h2><span id="qualityBadge" class="badge">2 BESTÄTIGUNGEN</span></div><div class="quality"><div class="qbox"><div class="qtitle">Aktuelle starke Kandidaten</div><div id="correlations"><div class="empty">Noch keine Korrelationsmessung.</div></div></div><div class="qbox"><div class="qtitle">Signal-Journal</div><div id="journal"><div class="empty">Noch keine qualifizierten Alerts.</div></div></div></div><div class="notice">Ein Trade-Alert wird erst versendet, wenn eine starke Rohstoffbewegung durch mindestens eine unabhängige Quelle bestätigt wird: frischer Katalysator, richtungsgleiche große Optionsaktivität oder extremer Cross-Market-Kontext.</div></section>
 <section class="section"><div class="head"><h2>Nur Extrembewegungen außerhalb des Rohstoff-Kerns</h2><span id="contextTime" class="badge">KONTEXT</span></div><div id="context" class="rows"><div class="empty">Kontext wird geladen…</div></div></section>
@@ -48,13 +48,17 @@ async function loadOil(){
     const state=d.status==='live'?'LIVE':d.status==='starting'?'STARTET':d.status==='offline'?'OFFLINE':String(d.status||'UNBEKANNT').toUpperCase();
     $('oilBadge').textContent=`${state} · ${esc(d.source||p.source||'Massive')}`;
     $('oilBadge').className=`badge ${d.status==='live'?'ok':d.status==='offline'?'bad':'pending'}`;
+    const proxy=p.instrumentType==='etf-proxy'||d.dataScope==='free-etf-proxy-iex';
     $('oilProducts').innerHTML=Object.entries(products).map(([code,x])=>{
       const contract=p.contracts?.[code]||{},b=x.baselineCounts||{};
       const ready=x.alertReadiness?.armed?'bereit':x.alertReadiness?.reason==='data-source-offline'?'Datenquelle offline':x.alertReadiness?.reason==='price-warm-up'?'Preis-Warm-up':'Orderflow-Warm-up';
       return `<div class="oilcard"><div class="oiltitle"><span>${esc(x.name||code)}</span><span class="${d.status==='live'?'ok':'pending'}">${esc(contract.ticker||'wartet')}</span></div><div class="oilmeta">Alarmstatus: ${esc(ready)}<br>Preis-Baseline: ${esc(b.total||0)} Min.<br>Orderflow-Baseline: ${esc(b.microstructure||0)} Min.<br>Letzte Minute: ${x.latestBucket?`${esc(x.latestBucket.returnBps)} bp · ${esc(x.latestBucket.volume)} Vol.`:'noch keine Live-Minute'}<br>Letzter Alarm: ${time(x.lastAlertAt)}</div></div>`
-    }).join('')||'<div class="empty">Noch keine Futures-Kontrakte aufgelöst.</div>';
+    }).join('')||'<div class="empty">Noch keine Ölinstrumente aufgelöst.</div>';
     const follow=c.m30?.evaluated?`${Math.round(Number(c.m30.followThroughRate||0)*100)}% · ${c.m30.evaluated} geprüft`:'sammelt Daten';
-    $('oilCalibration').innerHTML=`<div class="cal"><span>Marktvorfälle</span><strong>${esc(c.totalIncidents||0)}</strong></div><div class="cal"><span>Mit Trump-Post</span><strong>${esc(c.postLinkedIncidents||0)}</strong></div><div class="cal"><span>WTI + Brent</span><strong>${esc(c.crossMarketIncidents||0)}</strong></div><div class="cal"><span>30m Follow-through</span><strong>${esc(follow)}</strong></div>`;
+    $('oilCalibration').innerHTML=`<div class="cal"><span>Marktvorfälle</span><strong>${esc(c.totalIncidents||0)}</strong></div><div class="cal"><span>Mit Trump-Post</span><strong>${esc(c.postLinkedIncidents||0)}</strong></div><div class="cal"><span>${proxy?'USO + BNO':'WTI + Brent'}</span><strong>${esc(c.crossMarketIncidents||0)}</strong></div><div class="cal"><span>30m Follow-through</span><strong>${esc(follow)}</strong></div>`;
+    $('oilNotice').textContent=proxy
+      ?'Kostenloser Modus: Echtzeit-Trades und Quotes der Öl-ETFs USO und BNO über IEX. Das sind transparente WTI-/Brent-Proxys, keine vollständigen Futures-Daten. Mehrere Minuten und Posts werden je 30 Minuten zu einem Vorfall zusammengefasst.'
+      :'Futures-Modus: WTI- und Brent-Kontrakte mit Trade- und Quote-Mikrostruktur. Mehrere Minuten und Posts werden je 30 Minuten zu einem Vorfall zusammengefasst.';
     const incidents=(d.incidents||[]).slice(0,5);
     $('oilAnomalies').innerHTML=incidents.length?incidents.map(x=>{
       const outcome=x.outcomes?.m30?.valid?` · 30m ${x.outcomes.m30.directionalReturnBps>=0?'+':''}${esc(x.outcomes.m30.directionalReturnBps)} bp`:'';

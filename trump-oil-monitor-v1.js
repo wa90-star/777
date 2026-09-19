@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { createMassiveFuturesClient } = require("./massive-futures-v1");
+const { createAlpacaOilProxyClient } = require("./alpaca-oil-proxy-v1");
 
 const BUCKET_MS = 60 * 1000;
 const HISTORY_DAYS = 21;
@@ -31,6 +32,13 @@ const PRODUCTS = {
   CL: { name: "WTI Crude Oil" },
   BZ: { name: "Brent Crude Oil" }
 };
+
+function createDefaultOilProvider(options) {
+  if (String(process.env.OIL_DATA_MODE || "free-proxy").toLowerCase() === "massive") {
+    return createMassiveFuturesClient(options);
+  }
+  return createAlpacaOilProxyClient(options);
+}
 
 function round(value, digits = 3) {
   const n = Number(value);
@@ -137,7 +145,7 @@ function createTrumpOilMonitor({
   getPublicCatalysts = () => ({ items: [] }),
   dataDir = process.env.RADAR_DATA_DIR || "/data",
   now = () => Date.now(),
-  providerFactory = createMassiveFuturesClient
+  providerFactory = createDefaultOilProvider
 } = {}) {
   let storageFile = null;
   let persistence = "memory-only";
@@ -146,14 +154,17 @@ function createTrumpOilMonitor({
   let healthTimer = null;
   let everAuthenticated = false;
   let healthIncidentOpen = false;
+  let healthFailureStartedAt = 0;
   let lastHealthAlertAt = 0;
   const current = new Map();
   const liveQuotes = new Map();
 
   const state = {
-    version: 2,
+    version: 3,
     status: "initializing",
-    source: "massive-futures",
+    source: "initializing",
+    dataMode: null,
+    limitations: [],
     provider: null,
     products: Object.fromEntries(Object.keys(PRODUCTS).map((code) => [code, {
       productCode: code,
@@ -229,7 +240,7 @@ function createTrumpOilMonitor({
     try {
       const tmp = `${storageFile}.tmp`;
       const payload = {
-        version: 2,
+        version: 3,
         savedAt: new Date(now()).toISOString(),
         products: Object.fromEntries(Object.entries(state.products).map(([code, product]) => [code, {
           ...product,
@@ -279,26 +290,36 @@ function createTrumpOilMonitor({
 
   function updateProviderStatus(next) {
     state.provider = next;
+    state.source = next.source || next.provider || state.source;
+    state.dataMode = next.mode || null;
+    state.limitations = Array.isArray(next.limitations) ? [...next.limitations] : [];
     for (const [code, contract] of Object.entries(next.contracts || {})) {
-      if (state.products[code]) state.products[code].ticker = contract.ticker;
+      if (state.products[code]) {
+        state.products[code].ticker = contract.ticker;
+        state.products[code].name = contract.displayName || PRODUCTS[code].name;
+      }
     }
     if (next.authenticated) {
       everAuthenticated = true;
       state.status = "live";
       state.lastError = null;
+      healthFailureStartedAt = 0;
+      if (healthTimer) clearTimeout(healthTimer);
+      healthTimer = null;
       if (healthIncidentOpen) {
         healthIncidentOpen = false;
         if (telegramConfigured?.()) {
           sendMessage([
             "777 DATENQUELLE WIEDERHERGESTELLT",
             "",
-            "Massive Futures ist wieder verbunden und authentifiziert.",
+            `${next.label || next.source || next.provider || "Öl-Datenquelle"} ist wieder verbunden und authentifiziert.`,
             `Zeit: ${new Date(now()).toISOString()}`
           ].join("\n")).catch((error) => console.error("777 oil monitor recovery alert failed:", error.message));
         }
       }
     } else if (next.lastError) {
       state.lastError = next.lastError;
+      if (!healthFailureStartedAt) healthFailureStartedAt = now();
       if (state.status !== "initializing") state.status = next.configured ? "degraded" : "offline";
       scheduleHealthAlert();
     }
@@ -306,27 +327,38 @@ function createTrumpOilMonitor({
 
   function scheduleHealthAlert() {
     if (!state.provider?.configured || healthTimer) return;
-    if (healthIncidentOpen && now() - lastHealthAlertAt < HEALTH_REPEAT_MS) return;
     const graceMs = everAuthenticated ? HEALTH_GRACE_MS : STARTUP_HEALTH_GRACE_MS;
+    if (!healthFailureStartedAt) healthFailureStartedAt = now();
+    const targetAt = healthIncidentOpen
+      ? lastHealthAlertAt + HEALTH_REPEAT_MS
+      : healthFailureStartedAt + graceMs;
+    const waitMs = Math.max(1000, targetAt - now());
     healthTimer = setTimeout(async () => {
       healthTimer = null;
-      if (state.provider?.authenticated || now() - lastHealthAlertAt < graceMs) return;
+      if (state.provider?.authenticated) return;
+      if (healthIncidentOpen && now() - lastHealthAlertAt < HEALTH_REPEAT_MS) {
+        scheduleHealthAlert();
+        return;
+      }
       healthIncidentOpen = true;
       lastHealthAlertAt = now();
-      if (!telegramConfigured?.()) return;
-      try {
-        await sendMessage([
-          "777 DATENQUELLE GESTÖRT",
-          "",
-          `Massive Futures liefert seit mindestens ${Math.round(graceMs / 60000)} Minuten keinen authentifizierten Live-Stream.`,
-          `Status: ${state.provider?.connection || "unbekannt"}`,
-          `Fehler: ${state.provider?.lastError || "keine Detailmeldung"}`,
-          "Während der Störung werden keine Orderflow-Alarme ausgegeben."
-        ].join("\n"));
-      } catch (error) {
-        console.error("777 oil monitor health alert failed:", error.message);
+      if (telegramConfigured?.()) {
+        try {
+          const sourceLabel = state.provider?.label || state.provider?.source || state.provider?.provider || "Öl-Datenquelle";
+          await sendMessage([
+            "777 DATENQUELLE GESTÖRT",
+            "",
+            `${sourceLabel} liefert seit mindestens ${Math.round(graceMs / 60000)} Minuten keinen authentifizierten Live-Stream.`,
+            `Status: ${state.provider?.connection || "unbekannt"}`,
+            `Fehler: ${state.provider?.lastError || "keine Detailmeldung"}`,
+            "Während der Störung werden keine Öl-Anomalie-Alarme ausgegeben."
+          ].join("\n"));
+        } catch (error) {
+          console.error("777 oil monitor health alert failed:", error.message);
+        }
       }
-    }, HEALTH_GRACE_MS);
+      scheduleHealthAlert();
+    }, waitMs);
     if (typeof healthTimer.unref === "function") healthTimer.unref();
   }
 
@@ -515,10 +547,26 @@ function createTrumpOilMonitor({
     }) || null;
   }
 
-  function recentIncident(timestamp, direction) {
+  function currentDataScope() {
+    return provider.getState().instrumentType === "etf-proxy"
+      ? "free-etf-proxy-iex"
+      : "futures-orderflow";
+  }
+
+  function incidentDataScope(incident) {
+    return incident.dataScope || "futures-orderflow";
+  }
+
+  function anomalyDataScope(anomaly) {
+    return anomaly.dataScope || "futures-orderflow";
+  }
+
+  function recentIncident(timestamp, direction, dataScope) {
     return state.incidents.find((incident) => {
       const first = safeTime(incident.firstEventAt || incident.openedAt);
-      return incident.direction === direction && timestamp >= first && timestamp - first <= INCIDENT_CLUSTER_MS;
+      return incident.direction === direction &&
+        incidentDataScope(incident) === dataScope &&
+        timestamp >= first && timestamp - first <= INCIDENT_CLUSTER_MS;
     }) || null;
   }
 
@@ -538,10 +586,13 @@ function createTrumpOilMonitor({
   function anomalyText(anomaly) {
     const sign = anomaly.direction === "LONG" ? "Kaufdruck" : "Verkaufsdruck";
     const postLinked = anomaly.classification === "POST_EVENT_ANOMALY" || anomaly.classification === "PRE_POST_LINK";
+    const proxyMode = anomaly.dataScope === "free-etf-proxy-iex";
     return [
-      "777 TRUMP-ÖL-FLOWALARM",
+      proxyMode ? "777 TRUMP-ÖL-PROXY-FLOWALARM" : "777 TRUMP-ÖL-FLOWALARM",
       "",
-      postLinked ? "AUFFÄLLIGKEIT IM TRUMP-POST-FENSTER" : "UNERKLÄRTE ORDERFLOW-ANOMALIE",
+      postLinked
+        ? "AUFFÄLLIGKEIT IM TRUMP-POST-FENSTER"
+        : proxyMode ? "UNERKLÄRTE IEX-PROXY-ANOMALIE" : "UNERKLÄRTE ORDERFLOW-ANOMALIE",
       `${anomaly.productName} (${anomaly.ticker}) · ${anomaly.direction}`,
       `Muster: ${sign} · Score ${anomaly.score}/100`,
       `Preisbewegung: ${anomaly.features.returnBps >= 0 ? "+" : ""}${anomaly.features.returnBps} bp`,
@@ -551,11 +602,13 @@ function createTrumpOilMonitor({
       anomaly.post ? `Trump-Post: ${anomaly.post.title.slice(0, 240)}` : "Kein zeitnaher Trump-Post erkannt.",
       anomaly.knownCatalyst ? `Öffentlicher Auslöser: ${anomaly.knownCatalyst.source} · ${anomaly.knownCatalyst.title}` : "Kein zeitnaher öffentlicher Öl-Auslöser erkannt.",
       `Zeitfenster: ${anomaly.windowStart} bis ${anomaly.windowEnd}`,
+      proxyMode ? "Datenumfang: kostenlose USO/BNO-ETF-Proxys, nur IEX. Das ist kein vollständiger WTI-/Brent-Futures-Orderflow." : null,
       "Hinweis: statistische Auffälligkeit, kein Beweis für Insiderhandel und noch kein Handelssignal."
     ].filter(Boolean).join("\n");
   }
 
   function crossMarketText(incident) {
+    const proxyMode = incidentDataScope(incident) === "free-etf-proxy-iex";
     return [
       "777 MARKTÜBERGREIFENDE ÖL-ANOMALIE",
       "",
@@ -564,7 +617,9 @@ function createTrumpOilMonitor({
       `Erstes Fenster: ${incident.firstEventAt}`,
       `Letztes Fenster: ${incident.lastEventAt}`,
       `Vorfall-ID: ${incident.id}`,
-      "Die Bestätigung in zwei Futures reduziert Einzelmarkt-Fehlalarme. Sie beweist weder Ursache noch Insiderhandel."
+      proxyMode
+        ? "Die gleichgerichtete Bestätigung in USO und BNO reduziert Einzel-ETF-Fehlalarme. Sie ersetzt keine Futures-Marktdaten und beweist weder Ursache noch Insiderhandel."
+        : "Die Bestätigung in zwei Futures reduziert Einzelmarkt-Fehlalarme. Sie beweist weder Ursache noch Insiderhandel."
     ].join("\n");
   }
 
@@ -611,6 +666,8 @@ function createTrumpOilMonitor({
       productCodes: [anomaly.productCode],
       primaryProductCode: anomaly.productCode,
       primaryTicker: anomaly.ticker,
+      dataScope: anomaly.dataScope,
+      dataSource: anomaly.dataSource,
       anchorPrice: anomaly.features.close,
       maxScore: anomaly.score,
       post: anomaly.post,
@@ -651,6 +708,8 @@ function createTrumpOilMonitor({
 
   function recordAnomaly(product, features, scored) {
     const timestamp = features.end;
+    const providerState = provider.getState();
+    const dataScope = currentDataScope();
     const post = nearbyPost(timestamp);
     const catalyst = knownCatalyst(timestamp);
     const unexplained = !post && !catalyst;
@@ -664,6 +723,8 @@ function createTrumpOilMonitor({
       productCode: product.productCode,
       productName: product.name,
       ticker: features.ticker,
+      dataScope,
+      dataSource: providerState.source || providerState.provider || null,
       direction: scored.direction,
       classification,
       unexplained,
@@ -679,7 +740,7 @@ function createTrumpOilMonitor({
       postLinkedAt: post ? new Date(now()).toISOString() : null,
       incidentId: null
     };
-    let incident = recentIncident(timestamp, scored.direction);
+    let incident = recentIncident(timestamp, scored.direction, dataScope);
     const isNewIncident = !incident;
     if (!incident) incident = createIncident(anomaly);
     const newProduct = isNewIncident ? false : mergeIntoIncident(incident, anomaly);
@@ -757,7 +818,9 @@ function createTrumpOilMonitor({
   }
 
   function calibrationState() {
-    const candidates = state.incidents.filter((incident) => incident.classification !== "EXPLAINED_EVENT");
+    const dataScope = currentDataScope();
+    const scopedIncidents = state.incidents.filter((incident) => incidentDataScope(incident) === dataScope);
+    const candidates = scopedIncidents.filter((incident) => incident.classification !== "EXPLAINED_EVENT");
     const horizon = (key) => {
       const outcomes = candidates.map((incident) => incident.outcomes?.[key]).filter((item) => item?.valid);
       const followed = outcomes.filter((item) => item.followThrough).length;
@@ -775,17 +838,19 @@ function createTrumpOilMonitor({
     const started = safeTime(state.observation.startedAt);
     const ended = safeTime(state.observation.lastBucketAt);
     const observedDays = started && ended >= started ? (ended - started + BUCKET_MS) / 86400000 : 0;
-    const unexplained = state.incidents.filter((incident) => incident.classification === "UNEXPLAINED_FLOW").length;
+    const unexplained = scopedIncidents.filter((incident) => incident.classification === "UNEXPLAINED_FLOW").length;
     return {
+      dataScope,
       status: m120.evaluated >= MIN_OUTCOMES_FOR_REVIEW ? "reviewable" : "collecting",
       thresholdPolicy: "fixed-until-reviewed",
       minimumOutcomesForReview: MIN_OUTCOMES_FOR_REVIEW,
       followThroughThresholdBps: FOLLOW_THROUGH_BPS,
-      totalIncidents: state.incidents.length,
+      totalIncidents: scopedIncidents.length,
       unexplainedIncidents: unexplained,
-      postLinkedIncidents: state.incidents.filter((incident) => Boolean(incident.post)).length,
-      explainedIncidents: state.incidents.filter((incident) => incident.classification === "EXPLAINED_EVENT").length,
-      crossMarketIncidents: state.incidents.filter((incident) => incident.productCodes.length >= 2).length,
+      postLinkedIncidents: scopedIncidents.filter((incident) => Boolean(incident.post)).length,
+      explainedIncidents: scopedIncidents.filter((incident) => incident.classification === "EXPLAINED_EVENT").length,
+      crossMarketIncidents: scopedIncidents.filter((incident) => incident.productCodes.length >= 2).length,
+      retainedOtherScopeIncidents: state.incidents.length - scopedIncidents.length,
       observedDays: round(observedDays, 2),
       unexplainedIncidentsPerObservedDay: observedDays >= 1 ? round(unexplained / observedDays, 2) : null,
       m30,
@@ -1008,6 +1073,7 @@ function createTrumpOilMonitor({
     bootstrapHistory,
     getState: () => {
       const providerState = provider.getState();
+      const dataScope = currentDataScope();
       return {
         ...state,
         products: Object.fromEntries(Object.entries(state.products).map(([code, product]) => {
@@ -1031,8 +1097,8 @@ function createTrumpOilMonitor({
             alertReadiness: { armed: reason === "armed", reason }
           }];
         })),
-        anomalies: state.anomalies.slice(0, 100),
-        incidents: state.incidents.slice(0, 100),
+        anomalies: state.anomalies.filter((item) => anomalyDataScope(item) === dataScope).slice(0, 100),
+        incidents: state.incidents.filter((item) => incidentDataScope(item) === dataScope).slice(0, 100),
         posts: state.posts.slice(0, 50),
         provider: providerState,
         calibration: calibrationState(),
@@ -1044,7 +1110,8 @@ function createTrumpOilMonitor({
           postLookbackMinutes: POST_LOOKBACK_MS / 60000,
           postForwardMinutes: POST_FORWARD_MS / 60000,
           outcomeHorizonsMinutes: Object.values(OUTCOME_HORIZONS).map((value) => value / 60000)
-        }
+        },
+        dataScope
       };
     },
     _test: {
@@ -1062,3 +1129,4 @@ function createTrumpOilMonitor({
 }
 
 module.exports = createTrumpOilMonitor;
+module.exports.createDefaultOilProvider = createDefaultOilProvider;

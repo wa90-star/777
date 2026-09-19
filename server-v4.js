@@ -295,7 +295,7 @@ function statusPayload() {
   const oilState = oilMonitor.getState();
   return {
     system: "777",
-    version: "5.0.0",
+    version: "5.1.0",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -316,7 +316,8 @@ function statusPayload() {
       "official-policy-catalysts",
       "fed-aggregate-feed-with-official-category-fallbacks",
       "market-snapshot-retries-with-twelve-data-fallback",
-      "massive-real-time-wti-brent-trades-and-bbo",
+      "oil-source-selector-free-alpaca-iex-proxy-or-optional-massive-futures",
+      "explicit-data-scope-labeling-no-futures-claims-in-proxy-mode",
       "persistent-trump-oil-orderflow-baseline",
       "fixed-window-market-incident-deduplication",
       "trump-post-burst-deduplication",
@@ -331,9 +332,14 @@ function statusPayload() {
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
     marketDataSource: marketState.source,
+    oilDataConfigured: oilState.provider.configured,
     futuresDataConfigured: oilState.provider.configured,
     futuresDataStatus: oilState.status,
     futuresDataSource: oilState.source,
+    oilDataMode: oilState.dataMode,
+    oilDataScope: oilState.dataScope,
+    oilDataLimitations: oilState.limitations,
+    oilInstruments: oilState.provider.contracts,
     futuresContracts: oilState.provider.contracts,
     oilMonitorMetrics: oilState.metrics,
     oilMonitorThresholds: oilState.thresholds,
@@ -450,7 +456,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v5.0.0 running on port ${PORT}`);
+  console.log(`777 v5.1.0 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);

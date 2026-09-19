@@ -65,9 +65,9 @@ Ein Shift um 24 Stunden verändert den Wochentag. Die ausgelösten Ereignisse h�
 
 Der neue Monitor zählt Marktvorfälle statt Post-Zeilen oder einzelne auffällige Minuten:
 
-1. Reale WTI- und Brent-Futures-Trades sowie Best-Bid/Best-Ask-Quotes ersetzen ETF-Balken als Orderflow-Grundlage.
+1. Im kostenlosen Produktionsmodus ersetzen echte Live-Trades und Best-Bid/Best-Ask-Quotes der Öl-ETFs USO und BNO die fehlerhaften synthetischen ETF-Balken. Diese Daten stammen nur von IEX und werden deshalb ausdrücklich als eingeschränkte ETF-Proxys, nicht als Futures-Orderflow, bezeichnet. Der optionale Massive-Modus verwendet stattdessen reale WTI- und Brent-Futures.
 2. Auffällige Minuten gleicher Richtung werden innerhalb eines festen 30-Minuten-Fensters zu genau einem Vorfall zusammengefasst. Das Fenster wird am ersten Ereignis verankert und kann nicht endlos weiterlaufen.
-3. WTI und Brent im selben Vorfall erhöhen die Evidenz, erzeugen aber keinen zweiten unabhängigen Vorfall.
+3. Die zweite Ölreihe im selben Vorfall, je nach Modus WTI/Brent oder USO/BNO, erhöht die Evidenz, erzeugt aber keinen zweiten unabhängigen Vorfall.
 4. Mehrere ölbezogene Trump-Posts innerhalb von 30 Minuten bilden einen Post-Schub. Ein Vorfall kann dadurch nur einmal bestätigt werden.
 5. Preis, Volumen, Trade-Imbalance und Quote-OFI werden gegen robuste Median/MAD-Baselines derselben Tageszeit geprüft.
 6. Bekannte öffentliche Auslöser wie das planmäßige EIA-Fenster werden separat klassifiziert und nicht als unerklärter Flow alarmiert.
@@ -76,6 +76,6 @@ Der neue Monitor zählt Marktvorfälle statt Post-Zeilen oder einzelne auffälli
 
 ## Zulässige Aussage
 
-Ein Alert bedeutet ausschließlich: In den Live-Futures ist ein statistisch ungewöhnlicher, richtungskonsistenter Marktvorfall aufgetreten, der nicht sofort durch einen bekannten öffentlichen Katalysator erklärt wurde oder zeitlich mit einem ölbezogenen Trump-Post zusammenfällt.
+Ein Alert im kostenlosen Modus bedeutet ausschließlich: In den live über IEX beobachteten USO-/BNO-ETF-Proxys ist ein statistisch ungewöhnlicher, richtungskonsistenter Marktvorfall aufgetreten, der nicht sofort durch einen bekannten öffentlichen Katalysator erklärt wurde oder zeitlich mit einem ölbezogenen Trump-Post zusammenfällt. Erst ein ausdrücklich als Futures-Modus gekennzeichneter Alert darf von WTI-/Brent-Futures-Daten sprechen.
 
 Er bedeutet nicht, dass ein Post die Bewegung verursacht hat, dass ein bestimmter Händler beteiligt war oder dass Insiderwissen vorlag. Diese Unterscheidung muss in Dashboard, Telegram und jeder späteren Auswertung erhalten bleiben.
