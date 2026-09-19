@@ -1,0 +1,64 @@
+name: Radar production health
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: radar-production-health
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out health probe
+        uses: actions/checkout@v7
+
+      - name: Probe production
+        id: health
+        continue-on-error: true
+        shell: bash
+        env:
+          RADAR_BASE_URL: https://chic-caring-production-d403.up.railway.app
+          RADAR_MIN_VERSION: 5.1.0
+        run: node ops/health-check.mjs 2>&1 | tee /tmp/radar-health.txt
+
+      - name: Open one incident on failure
+        if: steps.health.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='[Radar] Production endpoint unavailable'
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq 'map(select(.title == "[Radar] Production endpoint unavailable"))[0].number // empty')"
+          if [ -n "$existing" ]; then
+            exit 0
+          fi
+          {
+            printf 'Die unabhängige kostenlose Zustandsprüfung ist um %s fehlgeschlagen.\n\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            printf 'Workflow: %s/actions/runs/%s\n\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'Prüfergebnis:\n```text\n'
+            tail -c 3500 /tmp/radar-health.txt
+            printf '\n```\n'
+          } > /tmp/radar-incident.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/radar-incident.md
+
+      - name: Close incident after recovery
+        if: steps.health.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq 'map(select(.title == "[Radar] Production endpoint unavailable"))[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --comment "Automatisch erholt am $(date -u +'%Y-%m-%dT%H:%M:%SZ')."
+          fi

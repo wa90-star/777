@@ -3,6 +3,9 @@
 ## Production
 
 - Railway service: `chic-caring`
+- Host-independent runtime: `Dockerfile` and `compose.yaml`; Railway is the current instance, not a permanent dependency
+- Free failover guide: `ops/FREE-HOSTING.md`
+- Independent public-repository watchdog: `.github/workflows/radar-health.yml`
 - Runtime: `server-v4.js`
 - Market engine: `market-engine-v4.js`
 - Policy/social catalyst engine: `catalyst-v4.js`
@@ -70,4 +73,4 @@ Google Sheet: `SIGNAL_RADAR_MASTER_LOG`
 - Do not emit an oil anomaly until both price and live microstructure baselines meet their minimum sample counts.
 - Never mix proxy and futures baselines or describe USO/BNO observations as WTI/Brent futures activity.
 - Do not describe temporal proximity to a post as proof of causation, coordination or insider trading.
-- Do not commit API keys, bot tokens, chat IDs, or other secrets. Secrets stay in Railway variables.
+- Do not commit API keys, bot tokens, chat IDs, or other secrets. Keep them only in each host's protected environment or local `.env`; `.env` is ignored by Git.
