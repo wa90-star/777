@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v4.9.1 - resilient market scans and official-source fallbacks
+// 777 Signal Radar Pro v5.0.0 - persistent Trump/oil futures anomaly monitoring
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -7,6 +7,7 @@ const createCatalystEngine = require("./catalyst-v4");
 const createEiaEngine = require("./eia-v4");
 const createEcbEngine = require("./ecb-v4");
 const createSignalJournal = require("./signal-journal-v4");
+const createTrumpOilMonitor = require("./trump-oil-monitor-v1");
 
 const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -21,6 +22,7 @@ let lastMarketDispatchSent = true;
 let lastAlertAt = null;
 let journal = null;
 let market = null;
+let oilMonitor = null;
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -179,6 +181,12 @@ function recordAlert(iso) {
   lastAlertAt = iso || new Date().toISOString();
 }
 
+async function sendOilTelegramMessage(text) {
+  const result = await sendTelegramMessage(text);
+  recordAlert();
+  return result;
+}
+
 function recordMarketAlert(iso) {
   if (lastMarketDispatchSent) recordAlert(iso);
 }
@@ -213,7 +221,8 @@ const catalysts = createCatalystEngine({
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert,
-  onFreshRelevant: (items) => queueMarketRecheck(items, "policy")
+  onFreshRelevant: (items) => queueMarketRecheck(items, "policy"),
+  onTrumpPost: (item) => oilMonitor?.recordTrumpPost(item)
 });
 
 const eia = createEiaEngine({
@@ -256,6 +265,12 @@ function combinedCatalystState() {
   };
 }
 
+oilMonitor = createTrumpOilMonitor({
+  sendMessage: sendOilTelegramMessage,
+  telegramConfigured,
+  getPublicCatalysts: combinedCatalystState
+});
+
 market = createMarketEngine({
   sendMessage: sendMarketTelegramMessage,
   telegramConfigured,
@@ -277,9 +292,10 @@ function statusPayload() {
   const eiaState = eia.getState();
   const ecbState = ecb.getState();
   const journalState = journal.getState();
+  const oilState = oilMonitor.getState();
   return {
     system: "777",
-    version: "4.9.1",
+    version: "5.0.0",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -300,6 +316,13 @@ function statusPayload() {
       "official-policy-catalysts",
       "fed-aggregate-feed-with-official-category-fallbacks",
       "market-snapshot-retries-with-twelve-data-fallback",
+      "massive-real-time-wti-brent-trades-and-bbo",
+      "persistent-trump-oil-orderflow-baseline",
+      "fixed-window-market-incident-deduplication",
+      "trump-post-burst-deduplication",
+      "incident-level-30m-120m-outcome-calibration",
+      "pre-post-and-post-event-anomaly-linking",
+      "explicit-source-health-alerting",
       "directional-options-confirmation",
       "persistent-30m-2h-outcome-journal",
       "event-driven-market-recheck-inside-market-window",
@@ -308,6 +331,12 @@ function statusPayload() {
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
     marketDataSource: marketState.source,
+    futuresDataConfigured: oilState.provider.configured,
+    futuresDataStatus: oilState.status,
+    futuresDataSource: oilState.source,
+    futuresContracts: oilState.provider.contracts,
+    oilMonitorMetrics: oilState.metrics,
+    oilMonitorThresholds: oilState.thresholds,
     marketWindowOpen: marketState.marketWindowOpen,
     coreSymbols: marketState.coreSymbols,
     contextSymbols: marketState.contextSymbols,
@@ -393,6 +422,7 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/eia") return sendJson(res, 200, eia.getState());
     if (requestUrl.pathname === "/api/ecb") return sendJson(res, 200, ecb.getState());
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
+    if (requestUrl.pathname === "/api/oil-monitor") return sendJson(res, 200, oilMonitor.getState());
 
     if (requestUrl.pathname === "/api/options") {
       const cached = market.getState().options;
@@ -420,7 +450,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v4.9.0 running on port ${PORT}`);
+  console.log(`777 v5.0.0 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
@@ -431,4 +461,19 @@ server.listen(PORT, "0.0.0.0", () => {
   catalysts.start();
   eia.start();
   ecb.start();
+  oilMonitor.start().catch((error) => console.error("777 oil monitor start error:", error.message));
 });
+
+let shutdownStarted = false;
+function shutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  console.log(`777 graceful shutdown: ${signal}`);
+  try { oilMonitor.stop(); } catch (error) { console.error("777 oil monitor shutdown error:", error.message); }
+  server.close(() => process.exit(0));
+  const timer = setTimeout(() => process.exit(1), 10000);
+  if (typeof timer.unref === "function") timer.unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
