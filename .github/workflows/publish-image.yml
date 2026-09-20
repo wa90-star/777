@@ -1,0 +1,55 @@
+name: Publish radar container
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "*.js"
+      - "public/**"
+      - "package.json"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/publish-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: radar-container-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish immutable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/wa90-star/777-radar:latest
+            ghcr.io/wa90-star/777-radar:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/wa90-star/777
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=5.1.0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
