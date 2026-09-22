@@ -8,6 +8,7 @@ ENV NODE_ENV=production \
 
 COPY --chown=node:node package.json ./
 COPY --chown=node:node *.js ./
+COPY --chown=node:node scripts/ ./scripts/
 COPY --chown=node:node public/ ./public/
 
 RUN mkdir -p /data && chown node:node /data

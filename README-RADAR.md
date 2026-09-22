@@ -15,6 +15,9 @@
 - Free oil-proxy provider: `alpaca-oil-proxy-v1.js`
 - Optional futures provider: `massive-futures-v1.js`
 - Trump/oil anomaly engine: `trump-oil-monitor-v1.js` -> `/data/trump-oil-monitor.json`
+- Radar-2 deterministic decision gate: `decision-engine-v5.js` (side-effect free; not yet the production alert path)
+- Kimi approval/import gate: `kimi-research-v1.js` + `scripts/import-kimi-research.js`
+- Kimi shadow store: `research-store-v1.js` -> optional `/data/kimi-research-shadow.json`
 - Dashboard: `public/dashboard-v4.html`
 - Primary market data: Alpaca IEX
 - Market-data fallback: Twelve Data after bounded Alpaca retries
@@ -31,6 +34,12 @@
 - Extreme override: GLD, SLV, USO, UNG only
 - Options: GLD, SLV, USO; indicative confirmation only; not a standalone signal
 - Outcome checks: automatic 30m and 2h evaluation, persisted across restarts
+
+## Kimi research layer
+
+Kimi K3 is an external research layer, not a market-data provider or alert engine. Research travels through the private `aktienradar-control` workflow, receives a separate human/Codex approval bound to the packet SHA-256, and is then imported with `npm run import:kimi`. The runtime accepts only `off` or `shadow`; imported candidates have no production or Telegram influence.
+
+The full operating contract, mode selection (K3 Agent vs Swarm vs Claw), approval format, importer command, and the blocked April-study handoff are documented in [`ops/KIMI-INTEGRATION.md`](ops/KIMI-INTEGRATION.md).
 
 ## Trump/oil monitor
 
@@ -71,6 +80,8 @@ Google Sheet: `SIGNAL_RADAR_MASTER_LOG`
 - Do not use general news as the primary trigger when an official/primary source exists.
 - Avoid duplicate alerts and startup alerts.
 - Do not auto-tune production thresholds before sufficient samples exist.
+- Never turn raw or merely Kimi-produced research into an alert; require an exact packet hash, explicit approval, and the deterministic radar gate.
+- Keep Kimi research in shadow mode until two complete end-to-end test runs pass.
 - Do not emit an oil anomaly until both price and live microstructure baselines meet their minimum sample counts.
 - Never mix proxy and futures baselines or describe USO/BNO observations as WTI/Brent futures activity.
 - Do not describe temporal proximity to a post as proof of causation, coordination or insider trading.
