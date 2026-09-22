@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v5.0.0 - persistent Trump/oil futures anomaly monitoring
+// 777 Signal Radar Pro v5.2.0 - persistent monitoring plus safe Kimi research shadow intake
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -8,6 +8,7 @@ const createEiaEngine = require("./eia-v4");
 const createEcbEngine = require("./ecb-v4");
 const createSignalJournal = require("./signal-journal-v4");
 const createTrumpOilMonitor = require("./trump-oil-monitor-v1");
+const createResearchStore = require("./research-store-v1");
 
 const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -23,6 +24,8 @@ let lastAlertAt = null;
 let journal = null;
 let market = null;
 let oilMonitor = null;
+const kimiResearch = createResearchStore();
+kimiResearch.load();
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -295,7 +298,7 @@ function statusPayload() {
   const oilState = oilMonitor.getState();
   return {
     system: "777",
-    version: "5.1.0",
+    version: "5.2.0",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -327,6 +330,7 @@ function statusPayload() {
       "directional-options-confirmation",
       "persistent-30m-2h-outcome-journal",
       "event-driven-market-recheck-inside-market-window",
+      "approved-kimi-research-shadow-only-no-alert-effect",
       "public-api-read-only-to-protect-data-budget"
     ],
     telegramConfigured: telegramConfigured(),
@@ -375,6 +379,7 @@ function statusPayload() {
     ecbPersistence: ecbState.persistence,
     calibration: journalState.calibration,
     sourceStatus: catalystState.sources,
+    kimiResearch: kimiResearch.getState(),
     time: new Date().toISOString()
   };
 }
@@ -456,12 +461,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v5.1.0 running on port ${PORT}`);
+  console.log(`777 v5.2.0 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
   console.log("777 extreme override: blocked on material day/velocity direction conflict");
   console.log("777 ECB: official monetary-policy events trigger fresh context + commodity recheck; no blind ECB directional confirmation");
+  console.log(`777 Kimi research: ${kimiResearch.getState().mode}; production influence disabled; Telegram influence disabled`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}; ECB ${ecb.getState().persistence}`);
   market.start();
   catalysts.start();
