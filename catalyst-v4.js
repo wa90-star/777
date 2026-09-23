@@ -93,14 +93,16 @@ function normalizeTrumpFmPosts(data) {
       /^https:\/\/truthsocial\.com\/@realDonaldTrump\/\d+(?:[/?#].*)?$/i.test(String(value))
     );
     const urlId = canonical?.match(/\/([0-9]+)(?:[/?#].*)?$/)?.[1] || null;
-    const rawId = String(post.originalId || post.platformId || post.id || "")
+    const rawId = String(post.platformId || post.id || "")
       .replace(/^(?:truth:|ts[_:-]?)/i, "")
       .trim();
     const id = urlId || (/^\d+$/.test(rawId) ? rawId : null);
-    const text = stripHtml(post.content);
+    const archivedPost = post.repostOf?.content ? post.repostOf : post;
+    const text = stripHtml(archivedPost.content || post.content);
     const publishedAt = post.createdAt || post.publishedAt || null;
     const publishedMs = new Date(publishedAt || "").getTime();
-    if (!id || !text || !Number.isFinite(publishedMs)) return null;
+    const archiveChecksum = String(post.checksum || "").trim();
+    if (!id || !text || !Number.isFinite(publishedMs) || !archiveChecksum) return null;
     return {
       id: `truth:${id}`,
       source: "Donald Trump · Truth Social public archive (trump.fm)",
@@ -109,7 +111,8 @@ function normalizeTrumpFmPosts(data) {
       url: `https://truthsocial.com/@realDonaldTrump/${id}`,
       publishedAt: new Date(publishedMs).toISOString(),
       sourceClass: "public-archive",
-      requiresIndependentConfirmation: true
+      requiresIndependentConfirmation: true,
+      archiveChecksum
     };
   }).filter(Boolean);
 }
