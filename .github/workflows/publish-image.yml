@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "*.js"
+      - "scripts/**"
       - "public/**"
       - "package.json"
       - "Dockerfile"
