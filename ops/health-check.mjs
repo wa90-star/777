@@ -1,7 +1,8 @@
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_BASE_URL = "https://chic-caring-production-d403.up.railway.app";
+const DEFAULT_BASE_URL = "https://radar-v5-image-production.up.railway.app";
 const DEFAULT_MIN_VERSION = "5.1.0";
+const DEFAULT_EXPECTED_PERSISTENCE_PATH = "/data";
 
 function numericVersion(value) {
   const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -18,7 +19,18 @@ export function versionAtLeast(actual, minimum) {
   return true;
 }
 
-export function assessHealth(status, oil, { minimumVersion = DEFAULT_MIN_VERSION } = {}) {
+function isDurablePersistence(value, expectedPath) {
+  return String(value || "") === `persistent:${expectedPath}`;
+}
+
+export function assessHealth(
+  status,
+  oil,
+  {
+    minimumVersion = DEFAULT_MIN_VERSION,
+    expectedPersistencePath = DEFAULT_EXPECTED_PERSISTENCE_PATH
+  } = {}
+) {
   const failures = [];
   if (status?.system !== "777") failures.push("unexpected-system");
   if (status?.status !== "online") failures.push("service-not-online");
@@ -26,10 +38,23 @@ export function assessHealth(status, oil, { minimumVersion = DEFAULT_MIN_VERSION
   if (status?.publicApiMode !== "read-only") failures.push("public-api-not-read-only");
   if (status?.telegramConfigured !== true) failures.push("telegram-not-configured");
   if (status?.oilDataConfigured !== true) failures.push("oil-data-not-configured");
-  if (!String(status?.journalPersistence || "").startsWith("persistent:")) failures.push("journal-not-persistent");
-  if (!String(oil?.persistence || "").startsWith("persistent:")) failures.push("oil-state-not-persistent");
+  if (!isDurablePersistence(status?.journalPersistence, expectedPersistencePath)) {
+    failures.push("journal-not-durable");
+  }
+  if (!isDurablePersistence(oil?.persistence, expectedPersistencePath)) {
+    failures.push("oil-state-not-durable");
+  }
   if (oil?.provider?.configured !== true) failures.push("oil-provider-not-configured");
   if (oil?.provider?.authenticated !== true) failures.push("oil-provider-not-authenticated");
+  if (oil?.provider?.connection !== "connected") failures.push("oil-provider-not-connected");
+  if (oil?.provider?.provider !== "alpaca" || oil?.source !== "alpaca-iex-oil-etf-proxy") {
+    failures.push("oil-source-unexpected");
+  }
+  if (oil?.provider?.lastError) failures.push(`oil-provider-error:${oil.provider.lastError}`);
+  if (oil?.lastError) failures.push(`oil-monitor-error:${oil.lastError}`);
+  for (const [name, source] of Object.entries(status?.sourceStatus || {})) {
+    if (source?.error) failures.push(`source-error:${name}:${source.error}`);
+  }
   if (oil?.status !== "live") failures.push("oil-monitor-not-live");
   return failures;
 }
@@ -50,6 +75,7 @@ async function fetchJson(url, timeoutMs) {
 export async function probe({
   baseUrl = process.env.RADAR_BASE_URL || DEFAULT_BASE_URL,
   minimumVersion = process.env.RADAR_MIN_VERSION || DEFAULT_MIN_VERSION,
+  expectedPersistencePath = process.env.RADAR_EXPECTED_PERSISTENCE_PATH || DEFAULT_EXPECTED_PERSISTENCE_PATH,
   attempts = Number(process.env.RADAR_HEALTH_ATTEMPTS || 3),
   timeoutMs = Number(process.env.RADAR_HEALTH_TIMEOUT_MS || 12000),
   retryDelayMs = Number(process.env.RADAR_HEALTH_RETRY_DELAY_MS || 8000)
@@ -65,7 +91,7 @@ export async function probe({
         fetchJson(statusUrl, timeoutMs),
         fetchJson(oilUrl, timeoutMs)
       ]);
-      const failures = assessHealth(status, oil, { minimumVersion });
+      const failures = assessHealth(status, oil, { minimumVersion, expectedPersistencePath });
       if (!failures.length) {
         return {
           ok: true,
@@ -102,4 +128,3 @@ async function main() {
 
 const executedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (executedDirectly) await main();
-
