@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_BASE_URL = "https://chic-caring-production-d403.up.railway.app";
+const DEFAULT_BASE_URL = "https://radar-v5-image-production.up.railway.app";
 const DEFAULT_MIN_VERSION = "5.1.0";
 
 function numericVersion(value) {
@@ -102,4 +102,3 @@ async function main() {
 
 const executedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (executedDirectly) await main();
-
