@@ -139,7 +139,7 @@ test("public archive posts require confirmation and never send direct Telegram a
       provider: "trump.fm",
       sourceClass: "public-archive",
       officialAutomationAccess: "licensed-only",
-      verification: "truth-id+canonical-url+utc-timestamp",
+      verification: "truth-id+canonical-url+utc-timestamp+checksum",
       requiresIndependentConfirmation: true,
       directTelegramAlerts: false,
       warning: null

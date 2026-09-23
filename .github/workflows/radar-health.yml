@@ -27,7 +27,7 @@ jobs:
         shell: bash
         env:
           RADAR_BASE_URL: https://radar-v5-image-production.up.railway.app
-          RADAR_MIN_VERSION: 5.1.0
+          RADAR_MIN_VERSION: 5.2.0
         run: node ops/health-check.mjs 2>&1 | tee /tmp/radar-health.txt
 
       - name: Open one incident on failure

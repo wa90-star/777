@@ -46,7 +46,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/wa90-star/777-radar:latest
             ghcr.io/wa90-star/777-radar:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/wa90-star/777

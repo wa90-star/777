@@ -6,12 +6,25 @@ function healthyPayloads() {
   return {
     status: {
       system: "777",
-      version: "5.1.0",
+      version: "5.2.0",
       status: "online",
       publicApiMode: "read-only",
       telegramConfigured: true,
       oilDataConfigured: true,
-      journalPersistence: "persistent:/data"
+      journalPersistence: "persistent:/data",
+      sourceStatus: {
+        trumpTruth: {
+          ok: true,
+          error: null,
+          warning: null,
+          endpoint: "trump.fm-public-api",
+          provider: "trump.fm",
+          sourceClass: "public-archive",
+          verification: "truth-id+canonical-url+utc-timestamp+checksum",
+          requiresIndependentConfirmation: true,
+          directTelegramAlerts: false
+        }
+      }
     },
     oil: {
       status: "live",
@@ -30,10 +43,10 @@ function healthyPayloads() {
 }
 
 test("compares semantic release versions without accepting malformed values", () => {
-  assert.equal(versionAtLeast("5.1.0", "5.1.0"), true);
-  assert.equal(versionAtLeast("5.2.0", "5.1.0"), true);
-  assert.equal(versionAtLeast("5.0.9", "5.1.0"), false);
-  assert.equal(versionAtLeast("unknown", "5.1.0"), false);
+  assert.equal(versionAtLeast("5.2.0", "5.2.0"), true);
+  assert.equal(versionAtLeast("5.3.0", "5.2.0"), true);
+  assert.equal(versionAtLeast("5.1.9", "5.2.0"), false);
+  assert.equal(versionAtLeast("unknown", "5.2.0"), false);
 });
 
 test("accepts a live, durable and authenticated deployment", () => {
@@ -65,10 +78,7 @@ test("rejects writable but ephemeral tmp persistence", () => {
 
 test("reports provider connection and concrete source errors", () => {
   const { status, oil } = healthyPayloads();
-  status.sourceStatus = {
-    eiaOfficial: { ok: false, error: "HTTP 503" },
-    trumpTruth: { ok: true, error: null, warning: "official endpoint unavailable" }
-  };
+  status.sourceStatus.eiaOfficial = { ok: false, error: "HTTP 503" };
   oil.provider.connection = "reconnecting";
   oil.provider.lastError = "stream closed";
   oil.lastError = "no current bucket";
@@ -78,4 +88,29 @@ test("reports provider connection and concrete source errors", () => {
     "oil-monitor-error:no current bucket",
     "source-error:eiaOfficial:HTTP 503"
   ]);
+});
+
+test("fails closed on a missing or weakened Trump archive contract", () => {
+  const { status, oil } = healthyPayloads();
+  status.sourceStatus.trumpTruth.ok = false;
+  status.sourceStatus.trumpTruth.endpoint = "mirror-fallback";
+  status.sourceStatus.trumpTruth.verification = "truth-id+timestamp";
+  status.sourceStatus.trumpTruth.requiresIndependentConfirmation = false;
+  status.sourceStatus.trumpTruth.directTelegramAlerts = true;
+  status.sourceStatus.trumpTruth.warning = "archive verification degraded";
+
+  assert.deepEqual(assessHealth(status, oil), [
+    "trump-truth-source-not-ok",
+    "trump-truth-endpoint-unexpected",
+    "trump-truth-verification-incomplete",
+    "trump-truth-independent-confirmation-disabled",
+    "trump-truth-direct-alerts-enabled",
+    "source-warning:trumpTruth:archive verification degraded"
+  ]);
+});
+
+test("fails closed when the Trump source status is absent", () => {
+  const { status, oil } = healthyPayloads();
+  delete status.sourceStatus.trumpTruth;
+  assert.deepEqual(assessHealth(status, oil), ["source-missing:trumpTruth"]);
 });

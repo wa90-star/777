@@ -535,7 +535,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         provider: "trump.fm",
         sourceClass: "public-archive",
         officialAutomationAccess: "licensed-only",
-        verification: "truth-id+canonical-url+utc-timestamp",
+        verification: "truth-id+canonical-url+utc-timestamp+checksum",
         requiresIndependentConfirmation: true,
         directTelegramAlerts: false,
         warning: null
