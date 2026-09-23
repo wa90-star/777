@@ -26,7 +26,7 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          RADAR_BASE_URL: https://chic-caring-production-d403.up.railway.app
+          RADAR_BASE_URL: https://radar-v5-image-production.up.railway.app
           RADAR_MIN_VERSION: 5.1.0
         run: node ops/health-check.mjs 2>&1 | tee /tmp/radar-health.txt
 
@@ -62,3 +62,8 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --comment "Automatisch erholt am $(date -u +'%Y-%m-%dT%H:%M:%SZ')."
           fi
+
+      - name: Fail workflow on unhealthy production
+        if: steps.health.outcome == 'failure'
+        shell: bash
+        run: exit 1
