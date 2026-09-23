@@ -51,6 +51,6 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/wa90-star/777
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=5.1.0
+            org.opencontainers.image.version=5.2.0
           cache-from: type=gha
           cache-to: type=gha,mode=max
