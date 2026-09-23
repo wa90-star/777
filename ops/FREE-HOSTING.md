@@ -48,7 +48,6 @@ Der Anwendungscode erwartet nur die Umgebungsvariablen aus `.env.example` und ei
 
 ## Unabhaengige Ueberwachung
 
-`.github/workflows/radar-health.yml` prueft die Produktions-URL viermal pro Stunde. Geprueft werden Version, Nur-Lese-Modus, Telegram-Konfiguration, persistenter Speicher sowie die konfigurierte und authentifizierte Oel-Datenquelle. Bei einem Fehler wird genau ein offenes GitHub-Issue angelegt und nach Erholung automatisch geschlossen.
+`.github/workflows/radar-health.yml` prueft die Produktions-URL viermal pro Stunde. Geprueft werden mindestens Version 5.2.0, Nur-Lese-Modus, Telegram-Konfiguration, persistenter Speicher, die konfigurierte und authentifizierte Oel-Datenquelle sowie der fail-closed Trump-Archivvertrag (`trump.fm-public-api`, vollstaendige ID-/Zeit-/Checksum-Pruefung, unabhaengige Bestaetigung erforderlich, keine direkten Telegram-Alarme). Bei einem Fehler wird genau ein offenes GitHub-Issue angelegt und nach Erholung automatisch geschlossen.
 
 GitHub dokumentiert Standard-Runner fuer oeffentliche Repositories als kostenlos. Zeitplaene koennen verzoegert werden und werden nach 60 Tagen ohne Repository-Aktivitaet deaktiviert. Dieser Watchdog ist deshalb eine unabhaengige Warnung, aber kein Ersatz fuer die laufende VM. Quellen: <https://docs.github.com/en/billing/concepts/product-billing/github-actions> und <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule>
-

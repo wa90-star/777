@@ -1,68 +1,66 @@
 # Deployment checkpoint
 
-Recorded: 2026-09-20, after the successful v5.1.0 image deployment and the first independent health-watch run.
+Recorded: 2026-09-23, after the verified v5.2.0 social-source deployment.
 
 ## Non-negotiable operating constraints
 
 - Do not buy or activate a paid subscription.
-- Railway is transitional because its trial expires.
-- Telegram remains the alert channel.
-- Keep full radar capability; reduce waste, not analytical coverage.
-- Never store API keys, Telegram tokens or chat IDs in this repository or this checkpoint.
+- Telegram remains the alert channel, but archive-only social posts never send direct Telegram alerts.
+- Never store API keys, Telegram tokens or chat IDs in this repository or checkpoint.
+- Keep the public API read-only and keep runtime state on the persistent `/data` volume.
+- Do not lower signal, freshness, confirmation, deduplication or calibration thresholds to make a check pass.
+- Deploy only immutable `ghcr.io/wa90-star/777-radar:<commit-sha>` images; never deploy `latest`.
 
-## Durable repository and image state
+## Verified production baseline
 
 - GitHub repository: `wa90-star/777`
-- Main incident-monitor implementation: `e79e10ba76405836dd1256d26c4fe27815d8da1f`
-- Portable-container publication commit: `90e074669b6ddbdbe528585617053b5bb5248a70`
-- Public immutable image: `ghcr.io/wa90-star/777-radar:90e074669b6ddbdbe528585617053b5bb5248a70`
-- GitHub Actions image build completed successfully and the package is public.
-- The repository contains the Docker/Compose runtime, Alpaca-IEX oil proxy, incident monitor, tests and health-check logic.
-
-## Verified live v5.1.0 instance
-
-- Railway service: `radar-v5-image`
-- Service ID: `9b834ba4-9b55-4535-acb4-093475bb03de`
-- Deployment: `0affd744-06db-4490-bd48-97f7e21892a6` (`SUCCESS`)
-- URL: `https://radar-v5-image-production.up.railway.app`
-- Image: the immutable GHCR image listed above.
-- Last independent endpoint check: `2026-09-20T04:23:16.799Z`
-- Verified: version `5.1.0`, `publicApiMode=read-only`, Telegram configured, oil monitor `live`, data mode `free-proxy`, Alpaca-IEX configured/authenticated/connected, no source error.
-- Limitation: `RADAR_DATA_DIR=/tmp/radar-data`; this service has no volume. Runtime state is writable but ephemeral and must not be treated as durable.
-
-## Legacy Railway service
-
-- Project: `accomplished-creation` (`129edff7-1574-4a45-8187-57046ff1fe0b`)
+- Source baseline: merge commit `11ba379d2a3dc9bc2a0dc57a077cc7ab42eda3af` (PR #8)
+- Immutable image: `ghcr.io/wa90-star/777-radar:11ba379d2a3dc9bc2a0dc57a077cc7ab42eda3af`
+- Railway project: `accomplished-creation` (`129edff7-1574-4a45-8187-57046ff1fe0b`)
 - Environment: `production` (`4d9e8751-cbf8-4cbd-822a-81c47a6bdade`)
-- Service: `chic-caring` (`26a16471-2551-4163-a269-b8c9faf648f6`)
-- Domain: `https://chic-caring-production-d403.up.railway.app`
-- Persistent volume: `radar-data` (`0833eef0-51ec-4bdf-abda-41204722fd53`), mounted at `/data`, 500 MB.
-- Last known running release: deployment `0851b97a-4931-48cd-8e17-5d9f1529600b`, version 4.9.1.
-- New repo-source deployments fail before application build on Railway's Metal/V3 builder. The latest failed attempt is `5ec44001-cc26-478b-8637-5965f1fb3269`.
-- The legacy domain and volume must be preserved until durable v5 state has been migrated and verified.
+- Service: `radar-v5-image` (`9b834ba4-9b55-4535-acb4-093475bb03de`)
+- Deployment: `22a07066-ae60-47f2-94d3-ffba5af53bf2` (`SUCCESS`)
+- URL: `https://radar-v5-image-production.up.railway.app`
+- Volume: `radar-v5-image-volume` (`4bb78e10-f647-4ae1-94bd-76c6148ccf70`), mounted at `/data`, 500 MB
+- Healthcheck: `/api/status`, timeout 90 seconds, one replica in `ams`
+- Verified at `2026-09-23T20:23:48Z`: version `5.2.0`, `publicApiMode=read-only`, Telegram configured, journal and oil state `persistent:/data`, oil monitor `live`, Alpaca IEX configured/authenticated/connected, provider and monitor errors `null`.
 
-## Temporary service to remove later
+## Verified social-source contract
 
-- Service: `radar-v5-canary` (`3015e039-f2ff-45a5-a88e-38589643e4a9`)
-- Current deployment: `2ab4a6bd-17d0-4f74-a5ca-98a1aae096fa` (`SUCCESS`)
-- It only serves a minimal Node health response and provides no radar value.
-- Remove or suspend it after the fallback path is verified so it does not consume trial resources.
+- Endpoint: `trump.fm-public-api`; provider: `trump.fm`; source class: `public-archive`.
+- The runtime does not automate the licensed official Truth Social endpoint.
+- Archive rows require the Truth platform, a numeric Truth ID, a valid UTC timestamp and a non-empty archive checksum. A canonical Truth URL is derived from the validated ID.
+- `requiresIndependentConfirmation=true`.
+- `directTelegramAlerts=false`.
+- Production check at `2026-09-23T20:23:48Z`: source `ok=true`, `error=null`, `warning=null`.
 
-## Independent watch already active
+## Current production scope
 
-- ChatGPT condition watch: `Radar-Ausfallwache`
-- Automation ID: `6aaf5f5e9b388191938f7e4951134553`
-- It checks the v5 status and oil-monitor endpoints hourly and stays silent while healthy.
-- It alerts only for endpoint failure, version regression, non-read-only public mode, missing Telegram setup, non-live oil monitor, missing/unauthenticated Alpaca-IEX source or a concrete provider error.
+- Core instruments: `GLD`, `SLV`, `USO`, `UNG`, `COPX`, `DBA`.
+- Context instruments: `SPY`, `QQQ`, `TLT`, `UUP`.
+- Oil proxies: `USO` for WTI and `BNO` for Brent, both explicitly limited to Alpaca Basic/IEX ETF data.
+- Market scan window: US extended market window, 07:00-20:00 `America/New_York` on weekdays.
+- Kimi mode: `off` unless an exact hash-bound, reviewed packet is deliberately imported into `shadow`; no production or Telegram influence.
+- The oil monitor can be `live` while its per-product microstructure alert readiness is still warming up. This is expected after a deployment and is not a reason to lower the 120-live-minute minimum.
 
-## Exact continuation plan
+## Independent health watch
 
-1. Add a no-cost scheduled GitHub Actions runner for the radar's analysis/Telegram path so alerts do not depend on the Railway trial.
-2. Make the scheduled run deterministic and testable, with explicit concurrency protection and failure reporting.
-3. Decide the durable-state mechanism without paid services. Prefer an already-owned always-on Linux device or an Oracle Always Free eligible VM for the full public API and `/data` volume. Do not enable a paid plan.
-4. Only after the free fallback is live and verified, migrate any required state from the legacy `/data` volume.
-5. Then remove the temporary canary and redundant Railway image service; keep the immutable GHCR image as the portable recovery artifact.
+`.github/workflows/radar-health.yml` checks production four times per hour. The check fails closed on version regression below 5.2.0, writable public API, missing Telegram setup, non-durable state, missing/unauthenticated/disconnected Alpaca IEX oil data, provider/source errors, a non-live oil monitor, or weakening of the Trump archive contract.
+
+## Preserved non-production services
+
+- `chic-caring` retains the older `radar-data` volume at `/data`; its newest deployment is failed and it is not the production endpoint.
+- `radar-v5-canary` remains a minimal canary and is not the production radar.
+- Neither service is a fallback until it has been deliberately brought to the same immutable image and has passed the same health contract.
+
+## Safe continuation plan
+
+1. Keep the live universe and thresholds unchanged while the private `aktienradar-control` task `global-social-session-lag-001` is researched and reviewed.
+2. Use Kimi only for source discovery, global-session timing, historical cases, counterexamples and reproducible research packets in Draft PRs.
+3. Add Asian/European session logic or additional stocks only after source licensing, market-data coverage, replay tests, false-positive analysis and two shadow end-to-end runs pass.
+4. Keep any future deployment pinned to the exact reviewed commit image and verify `/api/status` plus `/api/oil-monitor` twice after rollout.
+5. Maintain a no-cost host-independent recovery path without weakening persistence or source checks.
 
 ## Safe restart point
 
-If work stops because of a usage limit, resume from step 1 above. Before making infrastructure changes, re-check this file, current Git status, the two public endpoints and Railway service status. Do not repeat completed image-build work and do not expose or rotate secrets unless a verified deployment requires it.
+Before any infrastructure change, re-read this file, confirm the exact `main` commit and immutable image, inspect Railway service configuration without changing variables, and verify both public endpoints. Do not touch secrets, thresholds, orders or paid sources.

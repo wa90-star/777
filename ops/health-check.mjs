@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_BASE_URL = "https://radar-v5-image-production.up.railway.app";
-const DEFAULT_MIN_VERSION = "5.1.0";
+const DEFAULT_MIN_VERSION = "5.2.0";
 const DEFAULT_EXPECTED_PERSISTENCE_PATH = "/data";
 
 function numericVersion(value) {
@@ -54,6 +54,23 @@ export function assessHealth(
   if (oil?.lastError) failures.push(`oil-monitor-error:${oil.lastError}`);
   for (const [name, source] of Object.entries(status?.sourceStatus || {})) {
     if (source?.error) failures.push(`source-error:${name}:${source.error}`);
+  }
+  const trumpTruth = status?.sourceStatus?.trumpTruth;
+  if (!trumpTruth) {
+    failures.push("source-missing:trumpTruth");
+  } else {
+    if (trumpTruth.ok !== true) failures.push("trump-truth-source-not-ok");
+    if (trumpTruth.endpoint !== "trump.fm-public-api") failures.push("trump-truth-endpoint-unexpected");
+    if (trumpTruth.provider !== "trump.fm") failures.push("trump-truth-provider-unexpected");
+    if (trumpTruth.sourceClass !== "public-archive") failures.push("trump-truth-source-class-unexpected");
+    if (trumpTruth.verification !== "truth-id+canonical-url+utc-timestamp+checksum") {
+      failures.push("trump-truth-verification-incomplete");
+    }
+    if (trumpTruth.requiresIndependentConfirmation !== true) {
+      failures.push("trump-truth-independent-confirmation-disabled");
+    }
+    if (trumpTruth.directTelegramAlerts !== false) failures.push("trump-truth-direct-alerts-enabled");
+    if (trumpTruth.warning) failures.push(`source-warning:trumpTruth:${trumpTruth.warning}`);
   }
   if (oil?.status !== "live") failures.push("oil-monitor-not-live");
   return failures;

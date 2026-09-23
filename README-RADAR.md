@@ -2,7 +2,8 @@
 
 ## Production
 
-- Railway service: `chic-caring`
+- Railway project/environment/service: `accomplished-creation` / `production` / `radar-v5-image`
+- Production image policy: deploy only immutable `ghcr.io/wa90-star/777-radar:<commit-sha>` tags; never deploy `latest`
 - Host-independent runtime: `Dockerfile` and `compose.yaml`; Railway is the current instance, not a permanent dependency
 - Railway build configuration: `railway.json` pins the Dockerfile and the non-Metal V2 fallback build environment
 - Free failover guide: `ops/FREE-HOSTING.md`
@@ -43,7 +44,9 @@ The full operating contract, mode selection (K3 Agent vs Swarm vs Claw), approva
 
 ## Trump/oil monitor
 
-- Polls Donald Trump's public Truth Social account every 2 minutes through the official public account endpoint, with a mirror used only as a marked fallback, and only admits oil-relevant posts to the event linker.
+- Reads Donald Trump's publicly archived Truth posts every 2 minutes from `trump.fm-public-api`. The runtime does not automate the licensed official Truth Social endpoint.
+- Admits an archive row only after platform, numeric Truth ID, UTC timestamp and archive checksum validation; it emits a canonical Truth URL from the validated ID.
+- Archive posts are discovery/timing evidence only: `requiresIndependentConfirmation=true` and `directTelegramAlerts=false`. Only oil-relevant posts enter the event linker.
 - In the no-cost production mode, consumes real-time IEX trades and best bid/offer updates for USO and BNO over one persistent Alpaca WebSocket.
 - The free feed is an exchange subset and follows US equity extended hours. It cannot observe the full WTI/Brent futures market or futures trading outside those hours.
 - If `OIL_DATA_MODE=massive` and a compatible `MASSIVE_API_KEY` are supplied later, the same incident engine switches to real WTI and Brent futures. Stored proxy and futures baselines and calibration samples remain separated.
