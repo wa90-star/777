@@ -1,6 +1,6 @@
 # Deployment checkpoint
 
-Recorded: 2026-09-23, after the verified v5.2.0 social-source deployment.
+Recorded: 2026-09-23, after the verified v5.2.0 health-contract deployment.
 
 ## Non-negotiable operating constraints
 
@@ -14,16 +14,16 @@ Recorded: 2026-09-23, after the verified v5.2.0 social-source deployment.
 ## Verified production baseline
 
 - GitHub repository: `wa90-star/777`
-- Source baseline: merge commit `11ba379d2a3dc9bc2a0dc57a077cc7ab42eda3af` (PR #8)
-- Immutable image: `ghcr.io/wa90-star/777-radar:11ba379d2a3dc9bc2a0dc57a077cc7ab42eda3af`
+- Source baseline: merge commit `76af0e063191c9de0dd97ece211b8e0e5b299cc4` (PR #9; includes the PR #8 social-source correction)
+- Immutable image: `ghcr.io/wa90-star/777-radar:76af0e063191c9de0dd97ece211b8e0e5b299cc4`
 - Railway project: `accomplished-creation` (`129edff7-1574-4a45-8187-57046ff1fe0b`)
 - Environment: `production` (`4d9e8751-cbf8-4cbd-822a-81c47a6bdade`)
 - Service: `radar-v5-image` (`9b834ba4-9b55-4535-acb4-093475bb03de`)
-- Deployment: `22a07066-ae60-47f2-94d3-ffba5af53bf2` (`SUCCESS`)
+- Deployment: `f2dcd9b6-392e-4631-b5f7-5812405fb7cf` (`SUCCESS`)
 - URL: `https://radar-v5-image-production.up.railway.app`
 - Volume: `radar-v5-image-volume` (`4bb78e10-f647-4ae1-94bd-76c6148ccf70`), mounted at `/data`, 500 MB
 - Healthcheck: `/api/status`, timeout 90 seconds, one replica in `ams`
-- Verified at `2026-09-23T20:23:48Z`: version `5.2.0`, `publicApiMode=read-only`, Telegram configured, journal and oil state `persistent:/data`, oil monitor `live`, Alpaca IEX configured/authenticated/connected, provider and monitor errors `null`.
+- Verified at `2026-09-23T20:33:52.732Z` and `2026-09-23T20:36:05.197Z`: version `5.2.0`, `publicApiMode=read-only`, Telegram configured, journal and oil state `persistent:/data`, oil monitor `live`, Alpaca IEX configured/authenticated/connected, provider and monitor errors `null`.
 
 ## Verified social-source contract
 
@@ -32,7 +32,7 @@ Recorded: 2026-09-23, after the verified v5.2.0 social-source deployment.
 - Archive rows require the Truth platform, a numeric Truth ID, a valid UTC timestamp and a non-empty archive checksum. A canonical Truth URL is derived from the validated ID.
 - `requiresIndependentConfirmation=true`.
 - `directTelegramAlerts=false`.
-- Production check at `2026-09-23T20:23:48Z`: source `ok=true`, `error=null`, `warning=null`.
+- Both production checks above: source `ok=true`, `error=null`, `warning=null`, verification contract includes `checksum`.
 
 ## Current production scope
 
