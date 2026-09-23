@@ -87,16 +87,34 @@ function normalizeOfficialTrumpPosts(data) {
 
 function normalizeTrumpFmPosts(data) {
   return (Array.isArray(data?.data) ? data.data : []).map((post) => {
-    const text = stripHtml(post.content);
+    if (post.platform && String(post.platform).toLowerCase() !== "truth") return null;
+    const candidates = [post.canonicalUrl, post.originalUrl, post.url].filter(Boolean);
+    const canonical = candidates.find((value) =>
+      /^https:\/\/truthsocial\.com\/@realDonaldTrump\/\d+(?:[/?#].*)?$/i.test(String(value))
+    );
+    const urlId = canonical?.match(/\/([0-9]+)(?:[/?#].*)?$/)?.[1] || null;
+    const rawId = String(post.platformId || post.id || "")
+      .replace(/^(?:truth:|ts[_:-]?)/i, "")
+      .trim();
+    const id = urlId || (/^\d+$/.test(rawId) ? rawId : null);
+    const archivedPost = post.repostOf?.content ? post.repostOf : post;
+    const text = stripHtml(archivedPost.content || post.content);
+    const publishedAt = post.createdAt || post.publishedAt || null;
+    const publishedMs = new Date(publishedAt || "").getTime();
+    const archiveChecksum = String(post.checksum || "").trim();
+    if (!id || !text || !Number.isFinite(publishedMs) || !archiveChecksum) return null;
     return {
-      id: post.id ? `truth:${post.id}` : null,
-      source: "Donald Trump · Truth Social mirror fallback",
+      id: `truth:${id}`,
+      source: "Donald Trump · Truth Social public archive (trump.fm)",
       title: text,
       text,
-      url: post.id ? `https://truthsocial.com/@realDonaldTrump/${post.id}` : "",
-      publishedAt: post.createdAt || null
+      url: `https://truthsocial.com/@realDonaldTrump/${id}`,
+      publishedAt: new Date(publishedMs).toISOString(),
+      sourceClass: "public-archive",
+      requiresIndependentConfirmation: true,
+      archiveChecksum
     };
-  }).filter((item) => item.id && item.title);
+  }).filter(Boolean);
 }
 
 function hasAny(text, phrases) {
@@ -424,7 +442,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       .slice(0, 30);
   }
 
-  async function accept(sourceKey, rawItems, baseScore) {
+  async function accept(sourceKey, rawItems, baseScore, { allowDirectAlerts = true } = {}) {
     pruneSeen();
     const now = Date.now();
     const isBaseline = !primed.has(sourceKey);
@@ -466,7 +484,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       }
     }
 
-    if (telegramConfigured()) {
+    if (allowDirectAlerts && telegramConfigured()) {
       for (const item of alerts) {
         try {
           await sendMessage(formatAlert(item));
@@ -496,21 +514,15 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 
   async function scanTrump() {
     try {
-      let items;
-      let endpoint = "official";
-      let warning = null;
-      try {
-        const official = await getJson("https://truthsocial.com/api/v1/accounts/107780257626128497/statuses?limit=10&exclude_replies=true", 9000);
-        items = normalizeOfficialTrumpPosts(official);
-        if (!items.length) throw new Error("official endpoint returned no posts");
-      } catch (officialError) {
-        endpoint = "mirror-fallback";
-        warning = `Official endpoint unavailable: ${officialError.message}`;
-        const fallback = await getJson("https://trump.fm/api/posts?limit=10&platform=truth&includeDeleted=false", 9000);
-        items = normalizeTrumpFmPosts(fallback);
-        if (!items.length) throw new Error(`${warning}; mirror returned no posts`);
-      }
-      const accepted = await accept("trump", items, 70);
+      const archiveText = await getTextWithRetry(
+        "https://trump.fm/api/posts?limit=10&platform=truth&includeDeleted=false",
+        3,
+        9000,
+        { Accept: "application/json" }
+      );
+      const items = normalizeTrumpFmPosts(JSON.parse(archiveText));
+      if (!items.length) throw new Error("public archive returned no valid Truth Social posts");
+      const accepted = await accept("trump", items, 70, { allowDirectAlerts: false });
       for (const item of accepted.fresh || []) {
         try {
           await onTrumpPost?.(item);
@@ -518,9 +530,26 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
           console.error("777 Trump oil callback failed:", error.message);
         }
       }
-      await markTrumpSource(true, null, { endpoint, warning });
+      await markTrumpSource(true, null, {
+        endpoint: "trump.fm-public-api",
+        provider: "trump.fm",
+        sourceClass: "public-archive",
+        officialAutomationAccess: "licensed-only",
+        verification: "truth-id+canonical-url+utc-timestamp",
+        requiresIndependentConfirmation: true,
+        directTelegramAlerts: false,
+        warning: null
+      });
     } catch (error) {
-      await markTrumpSource(false, error.message, { endpoint: "unavailable", warning: null });
+      await markTrumpSource(false, error.message, {
+        endpoint: "trump.fm-public-api",
+        provider: "trump.fm",
+        sourceClass: "public-archive",
+        officialAutomationAccess: "licensed-only",
+        requiresIndependentConfirmation: true,
+        directTelegramAlerts: false,
+        warning: null
+      });
       console.error("777 Trump source error:", error.message);
     }
   }
