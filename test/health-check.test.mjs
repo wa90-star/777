@@ -15,6 +15,11 @@ function healthyPayloads() {
       marketDataConfigured: true,
       marketDataSource: "alpaca-iex",
       oilDataConfigured: true,
+      oilDataScope: "free-etf-proxy-iex",
+      futuresDataConfigured: false,
+      futuresDataStatus: "not-configured",
+      futuresDataSource: null,
+      futuresContracts: {},
       journalPersistence: "persistent:/data",
       catalystPersistence: "persistent:/data",
       eiaPersistence: "persistent:/data",
@@ -178,5 +183,20 @@ test("checks every persisted subsystem and the primary market feed", () => {
     "catalyst-state-not-durable",
     "eia-state-not-durable",
     "ecb-state-not-durable"
+  ]);
+});
+
+test("fails closed when an ETF proxy is exposed as futures data", () => {
+  const { status, oil } = healthyPayloads();
+  status.futuresDataConfigured = true;
+  status.futuresDataStatus = "live";
+  status.futuresDataSource = "alpaca-iex-oil-etf-proxy";
+  status.futuresContracts = { CL: { ticker: "USO" } };
+
+  assert.deepEqual(assessHealth(status, oil), [
+    "oil-proxy-mislabeled-as-futures",
+    "futures-status-unexpected-for-proxy",
+    "futures-source-present-for-proxy",
+    "futures-contracts-present-for-proxy"
   ]);
 });

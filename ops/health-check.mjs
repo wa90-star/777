@@ -58,6 +58,12 @@ export function assessHealth(
   if (status?.marketDataConfigured !== true) failures.push("market-data-not-configured");
   if (status?.marketDataSource !== "alpaca-iex") failures.push("market-data-source-unexpected");
   if (status?.oilDataConfigured !== true) failures.push("oil-data-not-configured");
+  if (status?.oilDataScope === "free-etf-proxy-iex") {
+    if (status?.futuresDataConfigured !== false) failures.push("oil-proxy-mislabeled-as-futures");
+    if (status?.futuresDataStatus !== "not-configured") failures.push("futures-status-unexpected-for-proxy");
+    if (status?.futuresDataSource != null) failures.push("futures-source-present-for-proxy");
+    if (Object.keys(status?.futuresContracts || {}).length > 0) failures.push("futures-contracts-present-for-proxy");
+  }
   if (!isDurablePersistence(status?.journalPersistence, expectedPersistencePath)) {
     failures.push("journal-not-durable");
   }
