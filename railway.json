@@ -5,6 +5,7 @@
     "dockerfilePath": "Dockerfile",
     "watchPatterns": [
       "/server-v4.js",
+      "/data-scope-v1.js",
       "/market-engine-v4.js",
       "/catalyst-v4.js",
       "/eia-v4.js",

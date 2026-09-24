@@ -1,8 +1,18 @@
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_BASE_URL = "https://radar-v5-image-production.up.railway.app";
-const DEFAULT_MIN_VERSION = "5.2.0";
+const DEFAULT_MIN_VERSION = "5.2.1";
 const DEFAULT_EXPECTED_PERSISTENCE_PATH = "/data";
+const DEFAULT_SOURCE_MAX_AGE_MS = 45 * 60 * 1000;
+const REQUIRED_SOURCES = [
+  "trumpTruth",
+  "federalReserve",
+  "whiteHouse",
+  "federalRegister",
+  "pelosiOfficial",
+  "eiaOfficial",
+  "europeanCentralBank"
+];
 
 function numericVersion(value) {
   const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -23,12 +33,20 @@ function isDurablePersistence(value, expectedPath) {
   return String(value || "") === `persistent:${expectedPath}`;
 }
 
+function isFreshTimestamp(value, nowMs, maxAgeMs) {
+  const timestamp = new Date(value || "").getTime();
+  const age = nowMs - timestamp;
+  return Number.isFinite(timestamp) && age >= -5 * 60 * 1000 && age <= maxAgeMs;
+}
+
 export function assessHealth(
   status,
   oil,
   {
     minimumVersion = DEFAULT_MIN_VERSION,
-    expectedPersistencePath = DEFAULT_EXPECTED_PERSISTENCE_PATH
+    expectedPersistencePath = DEFAULT_EXPECTED_PERSISTENCE_PATH,
+    sourceMaxAgeMs = DEFAULT_SOURCE_MAX_AGE_MS,
+    nowMs = Date.now()
   } = {}
 ) {
   const failures = [];
@@ -37,9 +55,20 @@ export function assessHealth(
   if (!versionAtLeast(status?.version, minimumVersion)) failures.push(`version-below-${minimumVersion}`);
   if (status?.publicApiMode !== "read-only") failures.push("public-api-not-read-only");
   if (status?.telegramConfigured !== true) failures.push("telegram-not-configured");
+  if (status?.marketDataConfigured !== true) failures.push("market-data-not-configured");
+  if (status?.marketDataSource !== "alpaca-iex") failures.push("market-data-source-unexpected");
   if (status?.oilDataConfigured !== true) failures.push("oil-data-not-configured");
   if (!isDurablePersistence(status?.journalPersistence, expectedPersistencePath)) {
     failures.push("journal-not-durable");
+  }
+  if (!isDurablePersistence(status?.catalystPersistence, expectedPersistencePath)) {
+    failures.push("catalyst-state-not-durable");
+  }
+  if (!isDurablePersistence(status?.eiaPersistence, expectedPersistencePath)) {
+    failures.push("eia-state-not-durable");
+  }
+  if (!isDurablePersistence(status?.ecbPersistence, expectedPersistencePath)) {
+    failures.push("ecb-state-not-durable");
   }
   if (!isDurablePersistence(oil?.persistence, expectedPersistencePath)) {
     failures.push("oil-state-not-durable");
@@ -52,13 +81,22 @@ export function assessHealth(
   }
   if (oil?.provider?.lastError) failures.push(`oil-provider-error:${oil.provider.lastError}`);
   if (oil?.lastError) failures.push(`oil-monitor-error:${oil.lastError}`);
-  for (const [name, source] of Object.entries(status?.sourceStatus || {})) {
-    if (source?.error) failures.push(`source-error:${name}:${source.error}`);
+  const sourceStatus = status?.sourceStatus || {};
+  for (const name of REQUIRED_SOURCES) {
+    const source = sourceStatus[name];
+    if (!source) {
+      failures.push(`source-missing:${name}`);
+      continue;
+    }
+    if (source.ok !== true) failures.push(`source-not-ok:${name}`);
+    if (!isFreshTimestamp(source.lastScanAt, nowMs, sourceMaxAgeMs)) failures.push(`source-stale:${name}`);
   }
-  const trumpTruth = status?.sourceStatus?.trumpTruth;
-  if (!trumpTruth) {
-    failures.push("source-missing:trumpTruth");
-  } else {
+  for (const [name, source] of Object.entries(sourceStatus)) {
+    if (source?.error) failures.push(`source-error:${name}:${source.error}`);
+    if (source?.warning) failures.push(`source-warning:${name}:${source.warning}`);
+  }
+  const trumpTruth = sourceStatus.trumpTruth;
+  if (trumpTruth) {
     if (trumpTruth.ok !== true) failures.push("trump-truth-source-not-ok");
     if (trumpTruth.endpoint !== "trump.fm-public-api") failures.push("trump-truth-endpoint-unexpected");
     if (trumpTruth.provider !== "trump.fm") failures.push("trump-truth-provider-unexpected");
@@ -70,7 +108,14 @@ export function assessHealth(
       failures.push("trump-truth-independent-confirmation-disabled");
     }
     if (trumpTruth.directTelegramAlerts !== false) failures.push("trump-truth-direct-alerts-enabled");
-    if (trumpTruth.warning) failures.push(`source-warning:trumpTruth:${trumpTruth.warning}`);
+  }
+  const kimi = status?.kimiResearch;
+  if (!kimi) failures.push("kimi-status-missing");
+  else {
+    if (!new Set(["off", "shadow"]).has(kimi.mode)) failures.push("kimi-mode-unsafe");
+    if (kimi.productionInfluence !== false) failures.push("kimi-production-influence-enabled");
+    if (kimi.telegramInfluence !== false) failures.push("kimi-telegram-influence-enabled");
+    if (kimi.lastError) failures.push(`kimi-error:${kimi.lastError}`);
   }
   if (oil?.status !== "live") failures.push("oil-monitor-not-live");
   return failures;

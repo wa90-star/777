@@ -1,6 +1,6 @@
 {
   "name": "777-signal-radar-pro",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "private": true,
   "scripts": {
     "start": "node server-v4.js",

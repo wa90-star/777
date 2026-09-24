@@ -23,7 +23,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Run fail-closed test suite
+        run: npm test
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -50,6 +66,6 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/wa90-star/777
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=5.2.0
+            org.opencontainers.image.version=5.2.1
           cache-from: type=gha
           cache-to: type=gha,mode=max
