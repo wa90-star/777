@@ -1,6 +1,6 @@
 # Deployment checkpoint
 
-Recorded: 2026-09-23, after the verified v5.2.0 health-contract deployment.
+Recorded: 2026-09-24, after the verified v5.2.1 schema- and health-contract deployment.
 
 ## Non-negotiable operating constraints
 
@@ -14,16 +14,16 @@ Recorded: 2026-09-23, after the verified v5.2.0 health-contract deployment.
 ## Verified production baseline
 
 - GitHub repository: `wa90-star/777`
-- Source baseline: merge commit `76af0e063191c9de0dd97ece211b8e0e5b299cc4` (PR #9; includes the PR #8 social-source correction)
-- Immutable image: `ghcr.io/wa90-star/777-radar:76af0e063191c9de0dd97ece211b8e0e5b299cc4`
+- Source baseline: merge commit `a69bbb54318e76e23c3eed66eb016031c534159f` (PR #11; includes the PR #8 social-source correction)
+- Immutable image: `ghcr.io/wa90-star/777-radar:a69bbb54318e76e23c3eed66eb016031c534159f`
 - Railway project: `accomplished-creation` (`129edff7-1574-4a45-8187-57046ff1fe0b`)
 - Environment: `production` (`4d9e8751-cbf8-4cbd-822a-81c47a6bdade`)
 - Service: `radar-v5-image` (`9b834ba4-9b55-4535-acb4-093475bb03de`)
-- Deployment: `f2dcd9b6-392e-4631-b5f7-5812405fb7cf` (`SUCCESS`)
+- Deployment: `c78ade75-23ae-46f2-bd9f-43ca3127e44e` (`SUCCESS`)
 - URL: `https://radar-v5-image-production.up.railway.app`
 - Volume: `radar-v5-image-volume` (`4bb78e10-f647-4ae1-94bd-76c6148ccf70`), mounted at `/data`, 500 MB
 - Healthcheck: `/api/status`, timeout 90 seconds, one replica in `ams`
-- Verified at `2026-09-23T20:33:52.732Z` and `2026-09-23T20:36:05.197Z`: version `5.2.0`, `publicApiMode=read-only`, Telegram configured, journal and oil state `persistent:/data`, oil monitor `live`, Alpaca IEX configured/authenticated/connected, provider and monitor errors `null`.
+- Verified at `2026-09-24T08:31:38.260Z` and `2026-09-24T08:34:24.096Z`: version `5.2.1`, `publicApiMode=read-only`, Telegram configured, journal/catalyst/EIA/ECB/oil state `persistent:/data`, oil monitor `live`, Alpaca IEX market and oil-proxy data configured/authenticated/connected, required sources fresh and error-free, and Kimi production/Telegram influence disabled.
 
 ## Verified social-source contract
 
@@ -39,13 +39,14 @@ Recorded: 2026-09-23, after the verified v5.2.0 health-contract deployment.
 - Core instruments: `GLD`, `SLV`, `USO`, `UNG`, `COPX`, `DBA`.
 - Context instruments: `SPY`, `QQQ`, `TLT`, `UUP`.
 - Oil proxies: `USO` for WTI and `BNO` for Brent, both explicitly limited to Alpaca Basic/IEX ETF data.
+- Proxy data is exposed only under `oilData*`; `futuresDataConfigured=false`, `futuresDataStatus=not-configured` and `futuresDataSource=null` until a real futures provider is deliberately configured.
 - Market scan window: US extended market window, 07:00-20:00 `America/New_York` on weekdays.
 - Kimi mode: `off` unless an exact hash-bound, reviewed packet is deliberately imported into `shadow`; no production or Telegram influence.
 - The oil monitor can be `live` while its per-product microstructure alert readiness is still warming up. This is expected after a deployment and is not a reason to lower the 120-live-minute minimum.
 
 ## Independent health watch
 
-`.github/workflows/radar-health.yml` checks production four times per hour. The check fails closed on version regression below 5.2.0, writable public API, missing Telegram setup, non-durable state, missing/unauthenticated/disconnected Alpaca IEX oil data, provider/source errors, a non-live oil monitor, or weakening of the Trump archive contract.
+`.github/workflows/radar-health.yml` checks production four times per hour. The check fails closed on version regression below 5.2.1, writable public API, missing Telegram setup, missing Alpaca IEX market data, non-durable journal/catalyst/EIA/ECB/oil state, missing/stale/unhealthy required sources, missing/unauthenticated/disconnected Alpaca IEX oil data, provider/source warnings or errors, a non-live oil monitor, unsafe Kimi influence, proxy/futures mislabelling, or weakening of the Trump archive contract.
 
 ## Preserved non-production services
 
