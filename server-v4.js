@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v5.2.0 - persistent monitoring plus safe Kimi research shadow intake
+// 777 Signal Radar Pro v5.2.1 - persistent monitoring plus safe Kimi research shadow intake
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -9,6 +9,7 @@ const createEcbEngine = require("./ecb-v4");
 const createSignalJournal = require("./signal-journal-v4");
 const createTrumpOilMonitor = require("./trump-oil-monitor-v1");
 const createResearchStore = require("./research-store-v1");
+const { publicOilScope } = require("./data-scope-v1");
 
 const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -296,9 +297,10 @@ function statusPayload() {
   const ecbState = ecb.getState();
   const journalState = journal.getState();
   const oilState = oilMonitor.getState();
+  const oilScope = publicOilScope(oilState);
   return {
     system: "777",
-    version: "5.2.0",
+    version: "5.2.1",
     status: "online",
     focus: "commodity-first",
     publicApiMode: "read-only",
@@ -336,15 +338,7 @@ function statusPayload() {
     telegramConfigured: telegramConfigured(),
     marketDataConfigured: marketState.alpacaConfigured,
     marketDataSource: marketState.source,
-    oilDataConfigured: oilState.provider.configured,
-    futuresDataConfigured: oilState.provider.configured,
-    futuresDataStatus: oilState.status,
-    futuresDataSource: oilState.source,
-    oilDataMode: oilState.dataMode,
-    oilDataScope: oilState.dataScope,
-    oilDataLimitations: oilState.limitations,
-    oilInstruments: oilState.provider.contracts,
-    futuresContracts: oilState.provider.contracts,
+    ...oilScope,
     oilMonitorMetrics: oilState.metrics,
     oilMonitorThresholds: oilState.thresholds,
     marketWindowOpen: marketState.marketWindowOpen,
@@ -461,7 +455,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v5.2.0 running on port ${PORT}`);
+  console.log(`777 v5.2.1 running on port ${PORT}`);
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);

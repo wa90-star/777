@@ -2,10 +2,27 @@ const crypto = require("crypto");
 
 const APPROVERS = new Set(["andreas", "chatgpt", "codex"]);
 const DIRECTION_MAP = new Map([
-  ["bullish", "LONG"],
-  ["bearish", "SHORT"],
-  ["long", "LONG"],
-  ["short", "SHORT"]
+  ["up", "LONG"],
+  ["down", "SHORT"]
+]);
+const MODES = new Set(["agent", "swarm"]);
+const TIMESTAMP_PRECISIONS = new Set(["exact", "minute", "hour", "day", "unknown"]);
+const NOVELTY_VALUES = new Set(["new", "update", "duplicate_suppressed", "stale"]);
+const DIRECTIONAL_HYPOTHESES = new Set(["up", "down", "neutral", "none"]);
+const TIME_HORIZONS = new Set(["days_to_weeks", "intraday_context", "weeks_to_months"]);
+const SOURCE_CLASSES = new Set([
+  "official_primary_documents",
+  "direct_market_data_with_methodology",
+  "news_agencies_specialist_media",
+  "other_media",
+  "social_aggregators"
+]);
+const ACCESS_STATUSES = new Set([
+  "accessible",
+  "partially_accessible",
+  "paywalled",
+  "blocked",
+  "unavailable"
 ]);
 
 function isObject(value) {
@@ -19,6 +36,18 @@ function nonEmptyString(value) {
 function validUtc(value) {
   if (!nonEmptyString(value) || !/Z$/i.test(value.trim())) return false;
   return Number.isFinite(new Date(value).getTime());
+}
+
+function validNullableUtc(value) {
+  return value == null || validUtc(value);
+}
+
+function stringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function objectArray(value) {
+  return Array.isArray(value) && value.every(isObject);
 }
 
 function sha256(text) {
@@ -39,25 +68,99 @@ function eventSources(event) {
   return [];
 }
 
-function independenceGroups(sources) {
-  return new Set(sources.map((source) => {
-    if (!isObject(source)) return "";
-    if (nonEmptyString(source.independence_group)) return source.independence_group.trim().toLowerCase();
+function sourcePublisherKey(source) {
+  if (!isObject(source)) return "";
+  if (nonEmptyString(source.publisher_author_account)) {
+    const publisher = source.publisher_author_account
+      .trim()
+      .toLowerCase()
+      .split(/\s+via\s+/i)[0]
+      .replace(/\s*\([^)]*\)\s*$/, "")
+      .trim();
+    if (publisher) return `publisher:${publisher}`;
+  }
+  try {
+    return `host:${new URL(source.url).hostname.toLowerCase().replace(/^www\./, "")}`;
+  } catch {
     return "";
-  }).filter(Boolean));
+  }
+}
+
+function sourceFingerprintKey(source) {
+  if (!isObject(source) || !nonEmptyString(source.content_fingerprint)) return "";
+  return source.content_fingerprint.trim().toLowerCase();
+}
+
+function sourceHost(source) {
+  try {
+    return new URL(source?.url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function isOriginalSocialAccountUrl(source) {
+  return new Set([
+    "truthsocial.com",
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com"
+  ]).has(sourceHost(source));
+}
+
+function independenceGroups(sources) {
+  const parents = sources.map((_, index) => index);
+  const find = (index) => {
+    while (parents[index] !== index) {
+      parents[index] = parents[parents[index]];
+      index = parents[index];
+    }
+    return index;
+  };
+  const join = (left, right) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+  const publisherOwners = new Map();
+  const fingerprintOwners = new Map();
+  sources.forEach((source, index) => {
+    const publisher = sourcePublisherKey(source);
+    const fingerprint = sourceFingerprintKey(source);
+    for (const [key, owners] of [[publisher, publisherOwners], [fingerprint, fingerprintOwners]]) {
+      if (!key) continue;
+      if (owners.has(key)) join(index, owners.get(key));
+      else owners.set(key, index);
+    }
+  });
+  return new Set(sources.map((_, index) => find(index)));
 }
 
 function validateSource(source, path) {
   const errors = [];
   if (!isObject(source)) return [`${path}:NOT_OBJECT`];
 
-  if (!nonEmptyString(source.url)) errors.push(`${path}.url:REQUIRED`);
+  if (!nonEmptyString(source.url) || !/^https?:\/\//i.test(source.url)) errors.push(`${path}.url:HTTP_URL_REQUIRED`);
+  for (const field of ["title", "publisher_author_account", "supported_fact"]) {
+    if (typeof source[field] !== "string") errors.push(`${path}.${field}:STRING_REQUIRED`);
+  }
+  if (source.original_timezone != null && typeof source.original_timezone !== "string") {
+    errors.push(`${path}.original_timezone:STRING_OR_NULL_REQUIRED`);
+  }
+  for (const field of ["source_published_time", "first_seen_time", "research_accessed_time"]) {
+    if (!validNullableUtc(source[field])) errors.push(`${path}.${field}:UTC_OR_NULL_REQUIRED`);
+  }
   const sourceClass = String(source.source_class || "").trim().toLowerCase();
-  if (!sourceClass) errors.push(`${path}.source_class:REQUIRED`);
-  if (!nonEmptyString(source.independence_group)) errors.push(`${path}.independence_group:REQUIRED`);
+  if (!SOURCE_CLASSES.has(sourceClass)) errors.push(`${path}.source_class:UNSUPPORTED`);
+  if (typeof source.is_primary !== "boolean") errors.push(`${path}.is_primary:BOOLEAN_REQUIRED`);
+  if (!ACCESS_STATUSES.has(source.access_status)) errors.push(`${path}.access_status:UNSUPPORTED`);
+  if (source.content_fingerprint != null && typeof source.content_fingerprint !== "string") {
+    errors.push(`${path}.content_fingerprint:STRING_OR_NULL_REQUIRED`);
+  }
 
-  const isPrimary = source.primary_source === true || source.is_primary === true;
-  if (["social_aggregators", "social_discovery", "aggregator"].includes(sourceClass) && isPrimary) {
+  if (sourceClass === "social_aggregators" && source.is_primary === true && !isOriginalSocialAccountUrl(source)) {
     errors.push(`${path}:AGGREGATOR_CANNOT_BE_PRIMARY`);
   }
   return errors;
@@ -71,21 +174,22 @@ function validateEvent(event, index) {
   for (const field of ["event_id", "headline"]) {
     if (!nonEmptyString(event[field])) errors.push(`${path}.${field}:REQUIRED`);
   }
+  for (const field of ["entities", "symbols", "alternative_explanations", "contradictions", "missing_data", "falsifiers"]) {
+    if (!stringArray(event[field])) errors.push(`${path}.${field}:STRING_ARRAY_REQUIRED`);
+  }
   for (const field of [
-    "entities",
-    "symbols",
     "facts",
     "calculations",
     "hypotheses",
     "evidence_for",
-    "evidence_against",
-    "alternative_explanations",
-    "contradictions",
-    "missing_data",
-    "falsifiers"
+    "evidence_against"
   ]) {
-    if (!Array.isArray(event[field])) errors.push(`${path}.${field}:ARRAY_REQUIRED`);
+    if (!objectArray(event[field])) errors.push(`${path}.${field}:OBJECT_ARRAY_REQUIRED`);
   }
+
+  if (!validUtc(event.event_time_utc)) errors.push(`${path}.event_time_utc:UTC_TIMESTAMP_REQUIRED`);
+  if (!TIMESTAMP_PRECISIONS.has(event.timestamp_precision)) errors.push(`${path}.timestamp_precision:UNSUPPORTED`);
+  if (!NOVELTY_VALUES.has(event.novelty)) errors.push(`${path}.novelty:UNSUPPORTED`);
 
   if (event.requires_gpt_review !== true) errors.push(`${path}.requires_gpt_review:MUST_BE_TRUE`);
   const confidence = Number(event.research_confidence);
@@ -108,10 +212,24 @@ function validateEvent(event, index) {
   }
 
   const directionalHypothesis = String(event.directional_hypothesis || "").trim().toLowerCase();
-  if (!directionalHypothesis) errors.push(`${path}.directional_hypothesis:REQUIRED`);
-  if (!nonEmptyString(event.mechanism)) errors.push(`${path}.mechanism:REQUIRED`);
-  if (!nonEmptyString(event.time_horizon)) errors.push(`${path}.time_horizon:REQUIRED`);
-  if (!nonEmptyString(event.materiality)) errors.push(`${path}.materiality:REQUIRED`);
+  if (!DIRECTIONAL_HYPOTHESES.has(directionalHypothesis)) {
+    errors.push(`${path}.directional_hypothesis:UNSUPPORTED`);
+  }
+  if (!TIME_HORIZONS.has(event.time_horizon)) errors.push(`${path}.time_horizon:UNSUPPORTED`);
+  if (typeof event.mechanism !== "string") errors.push(`${path}.mechanism:STRING_REQUIRED`);
+  if (!isObject(event.materiality)) {
+    errors.push(`${path}.materiality:OBJECT_REQUIRED`);
+  } else {
+    if (!Number.isInteger(event.materiality.score) || event.materiality.score < 0 || event.materiality.score > 100) {
+      errors.push(`${path}.materiality.score:OUT_OF_RANGE`);
+    }
+    if (typeof event.materiality.rationale !== "string") {
+      errors.push(`${path}.materiality.rationale:STRING_REQUIRED`);
+    }
+  }
+  if (event.do_not_alert_reason != null && typeof event.do_not_alert_reason !== "string") {
+    errors.push(`${path}.do_not_alert_reason:STRING_OR_NULL_REQUIRED`);
+  }
   return errors;
 }
 
@@ -119,16 +237,14 @@ function validateQa(qa) {
   if (!isObject(qa)) return ["qa:OBJECT_REQUIRED"];
   const errors = [];
   for (const field of [
-    "all_material_claims_cited",
-    "timestamps_normalized",
-    "duplicates_removed",
-    "source_independence_checked",
-    "primary_sources_prioritized",
-    "schema_valid"
+    "schema_validated",
+    "secrets_scanned",
+    "deduplication_checked",
+    "time_normalization_checked",
+    "run_id_consistency_checked"
   ]) {
     if (qa[field] !== true) errors.push(`qa.${field}:MUST_BE_TRUE`);
   }
-  if (!Array.isArray(qa.unresolved_conflicts)) errors.push("qa.unresolved_conflicts:ARRAY_REQUIRED");
   return errors;
 }
 
@@ -136,9 +252,12 @@ function validateResearchPacket(packet) {
   const errors = [];
   if (!isObject(packet)) return ["packet:OBJECT_REQUIRED"];
 
-  for (const field of ["schema_version", "task_id", "run_id", "mode"]) {
-    if (!nonEmptyString(packet[field])) errors.push(`${field}:REQUIRED`);
+  if (packet.schema_version !== "1.0") errors.push("schema_version:MUST_EQUAL_1.0");
+  if (!nonEmptyString(packet.task_id) || !/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(packet.task_id)) {
+    errors.push("task_id:INVALID");
   }
+  if (!nonEmptyString(packet.run_id)) errors.push("run_id:REQUIRED");
+  if (!MODES.has(packet.mode)) errors.push("mode:UNSUPPORTED");
   if (!Number.isInteger(packet.revision) || packet.revision < 1) errors.push("revision:POSITIVE_INTEGER_REQUIRED");
   if (!validUtc(packet.generated_at_utc)) errors.push("generated_at_utc:UTC_TIMESTAMP_REQUIRED");
   if (!validUtc(packet.as_of_utc)) errors.push("as_of_utc:UTC_TIMESTAMP_REQUIRED");
@@ -146,8 +265,30 @@ function validateResearchPacket(packet) {
     && new Date(packet.as_of_utc).getTime() > new Date(packet.generated_at_utc).getTime()) {
     errors.push("as_of_utc:AFTER_GENERATED_AT");
   }
-  if (!isObject(packet.scope)) errors.push("scope:OBJECT_REQUIRED");
-  if (!isObject(packet.collection)) errors.push("collection:OBJECT_REQUIRED");
+  if (!isObject(packet.scope)) {
+    errors.push("scope:OBJECT_REQUIRED");
+  } else {
+    if (!stringArray(packet.scope.included)) errors.push("scope.included:STRING_ARRAY_REQUIRED");
+    if (!stringArray(packet.scope.excluded)) errors.push("scope.excluded:STRING_ARRAY_REQUIRED");
+  }
+  if (!isObject(packet.collection)) {
+    errors.push("collection:OBJECT_REQUIRED");
+  } else {
+    if (!validUtc(packet.collection.started_utc)) errors.push("collection.started_utc:UTC_TIMESTAMP_REQUIRED");
+    if (!validUtc(packet.collection.finished_utc)) errors.push("collection.finished_utc:UTC_TIMESTAMP_REQUIRED");
+    if (!Number.isInteger(packet.collection.search_rounds_used)
+      || packet.collection.search_rounds_used < 0
+      || packet.collection.search_rounds_used > 2) {
+      errors.push("collection.search_rounds_used:OUT_OF_RANGE");
+    }
+    if (packet.collection.workstreams != null && !stringArray(packet.collection.workstreams)) {
+      errors.push("collection.workstreams:STRING_ARRAY_REQUIRED");
+    }
+    if (validUtc(packet.collection.started_utc) && validUtc(packet.collection.finished_utc)
+      && new Date(packet.collection.finished_utc).getTime() < new Date(packet.collection.started_utc).getTime()) {
+      errors.push("collection.finished_utc:BEFORE_STARTED_UTC");
+    }
+  }
   if (!Array.isArray(packet.events)) {
     errors.push("events:ARRAY_REQUIRED");
   } else {
