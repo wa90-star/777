@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const { spawn, spawnSync } = require("child_process");
+const { runRecoveryBackup } = require("./recovery-backup-v1");
 
 function parsePasswdEntry(contents, account) {
   const line = String(contents)
@@ -34,9 +35,16 @@ function prepareDataDirectory(dataDir, account = "node") {
   process.setuid(uid);
 }
 
+function prepareStartup({ dataDir, recoveryBackupId, prepare = prepareDataDirectory }) {
+  const backup = runRecoveryBackup({ dataDir, id: recoveryBackupId });
+  if (backup.enabled) console.log(`777 recovery backup ${backup.reused ? "verified" : "completed"}: ${backup.id}; ${backup.files} files; ${backup.bytes} bytes; same-volume copy`);
+  prepare(dataDir);
+  return backup;
+}
+
 function main() {
   const dataDir = process.env.RADAR_DATA_DIR || "/data";
-  prepareDataDirectory(dataDir);
+  prepareStartup({ dataDir, recoveryBackupId: process.env.RADAR_RECOVERY_BACKUP_ID });
 
   const dedupe = spawnSync(process.execPath, ["journal-dedupe-v4.js"], { stdio: "inherit" });
   if (dedupe.error) throw dedupe.error;
@@ -58,6 +66,11 @@ function main() {
   server.on("exit", (code) => process.exit(code ?? (stopping ? 0 : 1)));
 }
 
-module.exports = { parsePasswdEntry, prepareDataDirectory };
+module.exports = { parsePasswdEntry, prepareDataDirectory, prepareStartup };
 
-if (require.main === module) main();
+if (require.main === module) {
+  try { main(); } catch (error) {
+    console.error(`777 entrypoint failed: ${error.message}`);
+    process.exit(1);
+  }
+}

@@ -12,6 +12,16 @@ Der bestehende Node-Radar kann auf einem dauernd laufenden Linux-Host mit Docker
 
 Für Oracle A1 ist ARM64 relevant. Das vorhandene Dockerfile kann auf dem Zielhost nativ gebaut werden. Ein fertiges Image darf erst genutzt werden, wenn dessen Manifest die Zielarchitektur bestätigt. Ein x86-Test ist kein ARM-Laufzeittest.
 
+## Vorhandenes Railway-Projekt auf Free weiterführen
+
+Am 30.09.2026 bietet der vorhandene Workspace trotz `Trial expired` die Aktion `Downgrade to Free` an. Die geprüfte [Preisseite](https://railway.com/pricing) nennt 0 USD Grundpreis, 1 USD monatliches Ressourcenguthaben, 0,5 GB RAM und 0,5 GB Volume. Ein angebotener Tarif ist noch kein aktiver Tarif: Umstellung, verbleibendes Guthaben und anschließender Deployment-Erfolg müssen am Konto belegt werden. Ein [Railway-Mitarbeiter bestätigt](https://station.railway.com/questions/deployment-eviction-93369202), dass Deployments beim Überschreiten des Guthabens gestoppt werden. Historische Durchschnitte mit Ausfallzeiten beweisen deshalb keinen dauerhaft kostenlosen Vollbetrieb.
+
+Free erfordert App Sleeping. `sleepApplication=true` wurde für den vorhandenen Produktionsdienst am 30.09.2026 eingestellt; es wirkt beim nächsten Deployment. Laut [Serverless-Dokumentation](https://docs.railway.com/deployments/serverless) beginnt Inaktivität nach mindestens fünf Minuten ohne ausgehende Pakete. Die regulären externen Quellenabrufe sind echte Arbeit; keine künstlichen Keepalives hinzufügen. Bei echter Netzstille bleiben Einschlafen und ein verzögerter Wiederanlauf möglich und müssen im Livebetrieb geprüft werden.
+
+Dieser Weg verwendet denselben Dienst, dieselben vorhandenen Variablen und das bestehende `/data`-Volume. Kein zweiter Radar und keine neue leere Datenablage. Vor dem korrigierten Programmstart kann `RADAR_RECOVERY_BACKUP_ID=before-free-restart-v1` gesetzt werden. Das neue Container-Entrypoint erstellt dann **vor** Besitzänderungen, Journal-Migration und Serverstart eine vollständige, mit Prüfsummen überprüfte Kopie unter `/data/.radar-recovery/before-free-restart-v1`. Teilkopien, beschädigte Sicherungen, Symlinks oder zu wenig Platz blockieren den Start. Eine fertige ID wird bei Neustarts nur auf eigene Integrität geprüft; inzwischen veränderte Live-Daten werden nicht zurückgesetzt.
+
+Diese Kopie liegt auf demselben Volume und schützt nur den vorherigen Datenstand beim Programmupdate. Sie schützt nicht vor Verlust des gesamten Volumes und ersetzt keinen externen Export. Die Flagge ist standardmäßig aus; das Vorhandensein des Codes belegt keine ausgeführte Sicherung. Vor einem Rollback weder eine Sicherung löschen noch ein altes Image blind über neue Outbox-Daten starten.
+
 ## Dateien und read-only Vorprüfung
 
 `compose.free-host.yaml` ist eine eigenständige Alternative zu `compose.yaml`, kein zusätzlich gleichzeitig zu startender Dienst. Es verwendet denselben Projektnamen und dasselbe benannte Volume `signal-radar-777-data`, bindet den HTTP-Port aber fest an `127.0.0.1`. Ein Browserzugriff von außen benötigt einen gesondert geprüften HTTPS-Reverse-Proxy. Port 3000 wird nicht direkt freigegeben.
