@@ -15,7 +15,7 @@ const REQUIRED_SOURCES = [
 ];
 
 function numericVersion(value) {
-  const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  const match = String(value || "").match(/^(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?$/);
   return match ? match.slice(1).map(Number) : null;
 }
 
@@ -123,6 +123,15 @@ export function assessHealth(
     if (kimi.telegramInfluence !== false) failures.push("kimi-telegram-influence-enabled");
     if (kimi.lastError) failures.push(`kimi-error:${kimi.lastError}`);
   }
+  if (status?.marketLastError) failures.push(`market-provider-error:${status.marketLastError}`);
+  if (status?.telegramDelivery?.lastError) failures.push(`telegram-delivery-error:${status.telegramDelivery.lastError}`);
+  for (const [name, delivery] of Object.entries(status?.deliveryStatus || {})) {
+    if (delivery?.error) failures.push(`delivery-error:${name}:${delivery.error}`);
+    if (Number(delivery?.failed || 0) > 0) failures.push(`delivery-failed:${name}:${delivery.failed}`);
+    if (Number(delivery?.pending || 0) > 0 && !isFreshTimestamp(delivery.oldestPendingAt, nowMs, 5 * 60 * 1000)) {
+      failures.push(`delivery-backlog-stale:${name}`);
+    }
+  }
   if (oil?.status !== "live") failures.push("oil-monitor-not-live");
   return failures;
 }
@@ -132,12 +141,18 @@ function wait(milliseconds) {
 }
 
 async function fetchJson(url, timeoutMs) {
-  const response = await fetch(url, {
+  let response;
+  try {
+    response = await fetch(url, {
     headers: { Accept: "application/json", "User-Agent": "777-radar-health-watchdog" },
-    signal: AbortSignal.timeout(timeoutMs)
-  });
-  if (!response.ok) throw new Error(`${url.pathname}: HTTP ${response.status}`);
-  return response.json();
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    const reason = new Set(["TimeoutError", "AbortError"]).has(error.name) ? "timeout" : error.message;
+    throw new Error(`${url.pathname}: ${reason}`);
+  }
 }
 
 export async function probe({
@@ -148,17 +163,24 @@ export async function probe({
   timeoutMs = Number(process.env.RADAR_HEALTH_TIMEOUT_MS || 12000),
   retryDelayMs = Number(process.env.RADAR_HEALTH_RETRY_DELAY_MS || 8000)
 } = {}) {
+  for (const [name, value, min, max] of [["attempts", attempts, 1, 5], ["timeoutMs", timeoutMs, 1, 30000], ["retryDelayMs", retryDelayMs, 0, 60000]]) {
+    if (!Number.isInteger(value) || value < min || value > max) throw new Error(`Invalid ${name}: expected integer ${min}..${max}`);
+  }
   const base = new URL(baseUrl);
+  if (!new Set(["http:", "https:"]).has(base.protocol) || base.username || base.password) throw new Error("Invalid health base URL");
   const statusUrl = new URL("/api/status", base);
   const oilUrl = new URL("/api/oil-monitor", base);
   const errors = [];
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const [status, oil] = await Promise.all([
+      const responses = await Promise.allSettled([
         fetchJson(statusUrl, timeoutMs),
         fetchJson(oilUrl, timeoutMs)
       ]);
+      const failedRequests = responses.filter((result) => result.status === "rejected");
+      if (failedRequests.length) throw new Error(failedRequests.map((result) => result.reason.message).join("; "));
+      const [status, oil] = responses.map((result) => result.value);
       const failures = assessHealth(status, oil, { minimumVersion, expectedPersistencePath });
       if (!failures.length) {
         return {

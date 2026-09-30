@@ -10,10 +10,13 @@ const createSignalJournal = require("./signal-journal-v4");
 const createTrumpOilMonitor = require("./trump-oil-monitor-v1");
 const createResearchStore = require("./research-store-v1");
 const { publicOilScope } = require("./data-scope-v1");
+const { createTelegramTransport, redactError } = require("./telegram-transport-v1");
+const runDeferredMarketRecheck = require("./market-recheck-v1");
 
 const PORT = Number(process.env.PORT || 3000);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const telegramTransport = createTelegramTransport({ token: TELEGRAM_BOT_TOKEN, chatId: TELEGRAM_CHAT_ID });
 const ALLOWED_QUOTES = new Set(["GLD", "SLV", "USO", "UNG", "COPX", "DBA", "SPY", "QQQ", "TLT", "UUP"]);
 const MARKET_REPEAT_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 const MARKET_ESCALATION_MOVE_PCT = 2;
@@ -38,7 +41,7 @@ function sendJson(res, statusCode, data) {
 }
 
 function telegramConfigured() {
-  return Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID);
+  return telegramTransport.configured();
 }
 
 function shouldSuppressAdministrativeCatalyst(text) {
@@ -53,22 +56,7 @@ async function sendTelegramMessage(text) {
     console.log("777 administrative catalyst alert suppressed");
     return { suppressed: true, reason: "administrative-catalyst-noise" };
   }
-  if (!telegramConfigured()) throw new Error("Telegram not configured");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
-      signal: controller.signal
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.description || `Telegram HTTP ${response.status}`);
-    return data.result;
-  } finally {
-    clearTimeout(timer);
-  }
+  return telegramTransport.send(text);
 }
 
 function parseMarketAlert(text) {
@@ -153,8 +141,10 @@ function shouldDispatchMarketAlert(meta) {
 async function sendMarketTelegramMessage(text) {
   const meta = parseMarketAlert(text);
   if (!meta) {
-    lastMarketDispatchSent = true;
-    return sendTelegramMessage(text);
+    lastMarketDispatchSent = false;
+    const result = await sendTelegramMessage(text);
+    lastMarketDispatchSent = !result?.suppressed;
+    return result;
   }
   const key = marketSignalKey(meta);
   if (!marketDataFresh(meta)) {
@@ -176,7 +166,12 @@ async function sendMarketTelegramMessage(text) {
     console.log(`777 duplicate market alert suppressed: ${key}`);
     return { suppressed: true };
   }
+  lastMarketDispatchSent = false;
+  marketDispatchDecision.set(key, { sent: false, at: Date.now() });
   const result = await sendTelegramMessage(text);
+  if (result?.suppressed) return result;
+  lastMarketDispatchSent = true;
+  marketDispatchDecision.set(key, { sent: true, at: Date.now() });
   marketDispatchHistory.set(key, { ...meta, sentAt: Date.now() });
   return result;
 }
@@ -187,7 +182,7 @@ function recordAlert(iso) {
 
 async function sendOilTelegramMessage(text) {
   const result = await sendTelegramMessage(text);
-  recordAlert();
+  if (!result?.suppressed) recordAlert();
   return result;
 }
 
@@ -208,17 +203,13 @@ function recordMarketSignal(entry) {
 }
 
 function queueMarketRecheck(items, source, refreshContext = false) {
-  if (!market || !items?.length) return;
-  const timer = setTimeout(async () => {
-    try {
-      if (refreshContext) await market.runContext();
-      await market.runCore();
-    } catch (error) {
-      console.error(`777 event-driven ${source} recheck failed:`, error.message);
-    }
-  }, 0);
-  if (typeof timer.unref === "function") timer.unref();
-  console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); context refresh ${refreshContext ? "on" : "off"}; market-window gate retained`);
+  if (items?.length) console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); context refresh ${refreshContext ? "on" : "off"}; market-window gate retained`);
+  return runDeferredMarketRecheck({ market, items, refreshContext }).catch((error) => {
+    const message = redactError(error, [TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+      process.env.APCA_API_KEY_ID, process.env.APCA_API_SECRET_KEY, process.env.TWELVE]);
+    console.error(`777 event-driven ${source} recheck failed:`, message);
+    throw new Error(message);
+  });
 }
 
 const catalysts = createCatalystEngine({
@@ -336,8 +327,14 @@ function statusPayload() {
       "public-api-read-only-to-protect-data-budget"
     ],
     telegramConfigured: telegramConfigured(),
+    telegramDelivery: telegramTransport.getState(),
+    deliveryStatus: { policy: policyState.deliveryStatus, eia: eiaState.deliveryStatus },
     marketDataConfigured: marketState.alpacaConfigured,
     marketDataSource: marketState.source,
+    marketLastError: marketState.lastError ? redactError(marketState.lastError, [
+      TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, process.env.APCA_API_KEY_ID,
+      process.env.APCA_API_SECRET_KEY, process.env.TWELVE
+    ]) : null,
     ...oilScope,
     oilMonitorMetrics: oilState.metrics,
     oilMonitorThresholds: oilState.thresholds,
