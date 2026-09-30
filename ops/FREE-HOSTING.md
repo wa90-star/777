@@ -73,6 +73,18 @@ Diese Startbefehle sind dokumentiert, wurden durch das Hinzufügen der Dateien a
 
 Für die Produktivabnahme zusätzlich die vollständige Zustandsprüfung gegen die echte HTTPS-Adresse ausführen. Pflichtquellen müssen aktuell und fehlerfrei sein, Alpaca muss authentifiziert sein, Öl muss live sein und alle Zustände müssen unter `/data` liegen. Danach Neustartfestigkeit und eine ausdrücklich als Test gekennzeichnete Telegram-Zustellung kontrollieren. Ein Test darf weder einen echten Handelsalarm imitieren noch bereits versendete Signale erneut senden. Erst mit diesen Ergebnissen ist die Einrichtung abgeschlossen.
 
+## Externe Ausfallmeldung: vorbereitet, noch nicht aktiviert
+
+`ops/external-watchdog.mjs` verwendet die vollständige vorhandene Zustandsprüfung und führt genau einen Prüfzyklus aus. Er benötigt einen **separat betriebenen Host**, Node.js 24+, die ausdrücklich gesetzte `RADAR_BASE_URL`, vorhandene Telegram-Zugangsdaten und ein privates dauerhaftes Zustandsverzeichnis. Der aktuell existierende GitHub-Zeitplan wird dadurch nicht automatisch ersetzt oder schneller.
+
+Die Vorlagen `ops/systemd/radar-external-watchdog.service` und `.timer` installieren oder starten nichts. Vor Aktivierung muss der feste Systembenutzer `radar-watchdog` mit gleichnamiger Gruppe vorhanden sein; der geprüfte Quellstand liegt unter `/opt/radar`. Die private Datei `/etc/radar-watchdog.env` gehört root und hat Rechte `0600`. Sie enthält die Zieladresse sowie `TELEGRAM_BOT_TOKEN` und `TELEGRAM_CHAT_ID`; keine Schlüssel in Unit-Dateien oder Befehlszeilen schreiben. systemd legt das private Zustandsverzeichnis an. `flock` verhindert überlappende Zyklen.
+
+Der Timer wartet **60 Sekunden nach Abschluss** des vorigen Zyklus. Dazu kommen Laufzeit der Quellenprüfung, Zustellung und mögliche Zeitplanverzögerungen; dies ist kein garantierter minutengenauer oder sofortiger Alarm. Ein festgestellter Vorfall wird vor dem Versand dauerhaft gespeichert, aber erst nach gültiger Telegram-Antwort als zugestellt markiert. Fehlgeschlagene Zustellungen werden erneut versucht; `retry_after` wird respektiert. Ein bereits behobener, zuvor unzustellbarer Kurzausfall wird nachträglich ausdrücklich als behoben gemeldet. Entwarnung benötigt zwei gesunde vollständige Prüfungen. Beim Verlust einer Telegram-Antwort sind Doppelmeldungen technisch möglich.
+
+Für unverändert anhaltende Vorfälle beträgt der Erinnerungsabstand sechs Stunden. Ein neu hinzugekommener Endpunkt-Ausfall löst eine frühere Eskalation aus. Andere wechselnde Fehler innerhalb desselben noch offenen Vorfalls werden erst mit der nächsten Erinnerung gemeldet; nicht als sofortige Einzelalarmierung jedes Fehlers ausgeben. Ein beschädigter State oder eine unzulässige Konfiguration führt zu einem lokalen Monitorfehler und darf nicht als gesund interpretiert werden. Der Ausfall des Watchdog-Hosts selbst bleibt ohne weitere unabhängige Überwachung unerkannt.
+
+Vor Aktivierung müssen ein tatsächlicher Ausfall-/Zustelltest, die Wiederholung nach Sendefehler und der Wiederanlauf mit erhaltener State-Datei nachgewiesen werden. Die lokalen Tests senden keine echten Nachrichten. Anleitung zur Datenübernahme: `ops/VOLUME-MIGRATION.md`.
+
 ## Nachweise dieser Vorbereitung
 
 ```bash

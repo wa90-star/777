@@ -1,5 +1,22 @@
 # Deployment checkpoint
 
+## Current recovery state — 2026-10-01
+
+**Production is offline. The successful 2026-09-24 baseline below is historical, not current health.**
+
+- Last full public probe: `2026-09-30T22:08:41.845Z` (2026-10-01 00:08:41 Europe/Berlin). Both `/api/status` and `/api/oil-monitor` returned HTTP 404 on all three attempts.
+- Railway workspace still displays `Trial expired`; production has no active deployment. The existing `radar-v5-image-volume` remains attached at `/data` (500 MB). Its contents have **not** yet been exported or verified.
+- Exactly one previously prepared image change remains staged, not deployed: patch `6fe98666-cc23-4ece-b012-fd75eafcf9ae`, image `ghcr.io/wa90-star/777-radar:83eb07e6d1ed3c883d0ea019f314fd57b1a65960`. Do not infer a live deployment from this patch.
+- The recovery backup flag is configured for the next start, but no start has happened. No executed backup is established by the presence of that flag.
+- Railway CLI v5.63.1 checks for an active deployment in `volume_file_target` before volume-file access. CLI authentication alone therefore cannot export this paused service. A permitted temporary restart or provider-assisted export is still required; neither has occurred. See the [official source](https://github.com/railwayapp/cli/blob/v5.63.1/src/commands/volume.rs).
+- Oracle console and official sign-in page displayed `Site Unavailable` in the working browser. This is a limitation of the observed access path, not proof of a general Oracle outage. No Oracle VM, successful account login, free-resource allocation or paid plan has been established.
+- GitHub's existing scheduled health workflow creates an incident issue. It does not currently deliver Telegram messages, and observed execution gaps exceeded the configured 15-minute schedule. It is a supplementary check, not a timely alert guarantee.
+- A fresh Kimi communication challenge in private control issue #15 has no reply as of `2026-09-30T22:07:51Z`. Protocol files and local tests do not establish a working Kimi runtime.
+
+The user has authorized repair and a free Oracle attempt. Do not purchase/upgrade a plan, erase/replace the old volume, lower health thresholds, or label prepared tooling as deployed. See `RECOVERY-HANDOFF-20261001.md` for the next steps and acceptance evidence.
+
+## Historical baseline
+
 Recorded: 2026-09-24, after the verified v5.2.1 schema- and health-contract deployment.
 
 ## Non-negotiable operating constraints
@@ -46,7 +63,7 @@ Recorded: 2026-09-24, after the verified v5.2.1 schema- and health-contract depl
 
 ## Independent health watch
 
-`.github/workflows/radar-health.yml` checks production four times per hour. The check fails closed on version regression below 5.2.1, writable public API, missing Telegram setup, missing Alpaca IEX market data, non-durable journal/catalyst/EIA/ECB/oil state, missing/stale/unhealthy required sources, missing/unauthenticated/disconnected Alpaca IEX oil data, provider/source warnings or errors, a non-live oil monitor, unsafe Kimi influence, proxy/futures mislabelling, or weakening of the Trump archive contract.
+`.github/workflows/radar-health.yml` is scheduled to check production four times per hour; actual runs can be delayed. It does not currently send Telegram alerts. The check fails closed on version regression below 5.2.1, writable public API, missing Telegram setup, missing Alpaca IEX market data, non-durable journal/catalyst/EIA/ECB/oil state, missing/stale/unhealthy required sources, missing/unauthenticated/disconnected Alpaca IEX oil data, provider/source warnings or errors, a non-live oil monitor, unsafe Kimi influence, proxy/futures mislabelling, or weakening of the Trump archive contract.
 
 ## Preserved non-production services
 

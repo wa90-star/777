@@ -1,0 +1,12 @@
+# Prepared only; this file does not install or enable a timer.
+[Unit]
+Description=Check Radar independently 60 seconds after the previous cycle
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=radar-external-watchdog.service
+
+[Install]
+WantedBy=timers.target
