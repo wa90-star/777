@@ -1,0 +1,26 @@
+# Prepared only. Install on a DIFFERENT host from Radar after live acceptance.
+# /opt/radar must contain the reviewed source tree and Node.js >=24.
+# A dedicated radar-watchdog system user/group must exist before installation.
+# /etc/radar-watchdog.env must be root-owned mode0600 and contain RADAR_BASE_URL,
+# TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID. Never put credentials in this unit.
+[Unit]
+Description=Independent Radar health and delivery monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=radar-watchdog
+Group=radar-watchdog
+StateDirectory=radar-watchdog
+StateDirectoryMode=0700
+EnvironmentFile=/etc/radar-watchdog.env
+WorkingDirectory=/opt/radar
+ExecStart=/usr/bin/flock --nonblock /var/lib/radar-watchdog/run.lock /usr/bin/node /opt/radar/ops/external-watchdog.mjs
+TimeoutStartSec=120
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

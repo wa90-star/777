@@ -12,14 +12,24 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - ".github/workflows/publish-image.yml"
+  pull_request:
+    paths:
+      - "*.js"
+      - "scripts/**"
+      - "public/**"
+      - "test/**"
+      - "ops/**"
+      - "package.json"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/publish-image.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
-  group: radar-container-publish
+  group: radar-container-publish-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,13 +48,72 @@ jobs:
       - name: Run fail-closed test suite
         run: npm test
 
-  publish:
+  verify-platform:
     needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Enable ARM64 execution on the runner
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Load one platform per runner: the default Docker image store cannot
+      # load a multi-platform index. PRs have no registry write permission.
+      - name: Build and load platform image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.architecture }}
+          load: true
+          push: false
+          tags: radar-platform-check:${{ github.sha }}-${{ matrix.architecture }}
+          cache-from: type=gha,scope=radar-${{ matrix.architecture }}
+          cache-to: type=gha,scope=radar-${{ matrix.architecture }},mode=max
+
+      - name: Verify image architecture and isolated runtime
+        env:
+          IMAGE: radar-platform-check:${{ github.sha }}-${{ matrix.architecture }}
+          EXPECTED_PLATFORM: linux/${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          actual_platform="$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+          test "$actual_platform" = "$EXPECTED_PLATFORM"
+          node ops/container-smoke.mjs "$IMAGE"
+
+  publish:
+    # Only trusted main builds can authenticate or publish; both real
+    # platform smoke tests must pass first, including ARM under QEMU.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [test, verify-platform]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Enable ARM64 builds and registry verification
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -57,9 +126,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish immutable image
+        id: publish
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ghcr.io/wa90-star/777-radar:${{ github.sha }}
@@ -67,5 +138,33 @@ jobs:
             org.opencontainers.image.source=https://github.com/wa90-star/777
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=5.2.1
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=radar-amd64
+            type=gha,scope=radar-arm64
+
+      - name: Verify published digest and both runnable platforms
+        env:
+          IMAGE: ghcr.io/wa90-star/777-radar
+          REVISION: ${{ github.sha }}
+          PUBLISHED_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLISHED_DIGEST"
+          actual_digest="$(docker buildx imagetools inspect "$IMAGE:$REVISION" --format '{{json .Manifest}}' | jq -er '.digest')"
+          test "$actual_digest" = "$PUBLISHED_DIGEST"
+          reference="$IMAGE@$PUBLISHED_DIGEST"
+          docker buildx imagetools inspect "$reference" --raw > "$RUNNER_TEMP/radar-index.json"
+          # BuildKit provenance descriptors have unknown/unknown platforms.
+          # Require exactly one Linux image for each supported architecture.
+          jq -e '[.manifests[] | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture] | sort == ["linux/amd64", "linux/arm64"]' "$RUNNER_TEMP/radar-index.json"
+          for architecture in amd64 arm64; do
+            docker pull --platform "linux/$architecture" "$reference"
+            image_revision="$(docker image inspect "$reference" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+            test "$image_revision" = "$REVISION"
+            node_arch="$architecture"
+            if [ "$architecture" = amd64 ]; then node_arch=x64; fi
+            docker run --rm --network none --read-only --platform "linux/$architecture" \
+              --entrypoint node -e "EXPECTED_ARCH=$node_arch" "$reference" \
+              -e 'const assert=require("node:assert/strict"); assert.equal(process.platform,"linux"); assert.equal(process.arch,process.env.EXPECTED_ARCH); assert.equal(require("./package.json").version,"5.2.1"); console.log(JSON.stringify({platform:process.platform,architecture:process.arch,version:require("./package.json").version}));'
+          done
+          printf 'Verified image: `%s`\n\nPlatforms: `linux/amd64`, `linux/arm64`.\n' "$reference" >> "$GITHUB_STEP_SUMMARY"
