@@ -5,6 +5,7 @@ on:
     paths:
       - '*.js'
       - 'test/**'
+      - 'public/**'
       - 'ops/**'
       - 'Dockerfile'
       - 'compose*.yaml'

@@ -391,6 +391,10 @@ function serveDashboard(res) {
 const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    if (!new Set(["GET", "HEAD"]).has(req.method)) {
+      res.setHeader("Allow", "GET, HEAD");
+      return sendJson(res, 405, { error: "Public API is read-only" });
+    }
 
     if (requestUrl.pathname === "/api/status") return sendJson(res, 200, statusPayload());
 
