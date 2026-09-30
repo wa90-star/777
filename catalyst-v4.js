@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const createDeliveryOutbox = require("./delivery-outbox-v1");
 
 const KEYWORDS = [
   "oil", "crude", "petroleum", "natural gas", "lng", "pipeline",
@@ -263,6 +264,18 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     }
   };
 
+  const outbox = createDeliveryOutbox({
+    persist: persistState,
+    handlers: {
+      ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {}),
+      telegram: {
+        enabled: telegramConfigured,
+        deliver: ([item]) => sendMessage(formatAlert(item)),
+        onDelivered: () => onAlert?.(new Date().toISOString())
+      }
+    }
+  });
+
   function initStorage() {
     for (const dir of [preferredDir, path.join("/tmp", "777-radar")]) {
       try {
@@ -280,20 +293,23 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
   }
 
   function persistState() {
-    if (!storageFile) return;
+    if (!storageFile) return false;
     try {
       const tmp = `${storageFile}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify({
-        version: 2,
+        version: 3,
         savedAt: new Date().toISOString(),
         seen: [...seen.entries()],
         primed: [...primed],
         items: state.items.slice(0, 30),
-        trumpFeedHealth: state.trumpFeedHealth
+        trumpFeedHealth: state.trumpFeedHealth,
+        deliveryOutbox: outbox.snapshot()
       }, null, 2));
       fs.renameSync(tmp, storageFile);
+      return true;
     } catch (error) {
       console.error("777 catalyst persist error:", error.message);
+      return false;
     }
   }
 
@@ -320,6 +336,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         }))
         .slice(0, 30);
       state.trumpFeedHealth = { ...state.trumpFeedHealth, ...(parsed.trumpFeedHealth || {}) };
+      outbox.restore(parsed.deliveryOutbox);
       persistState();
       console.log(`777 catalyst state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
@@ -469,31 +486,14 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
 
     for (const item of rawItems) seen.set(item.id || item.url, now);
     if (fresh.length) state.items = [...fresh, ...state.items].slice(0, 30);
-    persistState();
 
     const alerts = fresh
       .filter((item) => item.priority === "HIGH")
-      .filter((item) => Object.keys(item.directionalBiases || {}).length > 0 || (item.urgentKeywordHits || []).length > 0)
-      .slice(0, 2);
+      .filter((item) => Object.keys(item.directionalBiases || {}).length > 0 || (item.urgentKeywordHits || []).length > 0);
 
-    if (alerts.length) {
-      try {
-        onFreshRelevant?.(alerts);
-      } catch (error) {
-        console.error("777 catalyst trigger callback failed:", error.message);
-      }
-    }
-
-    if (allowDirectAlerts && telegramConfigured()) {
-      for (const item of alerts) {
-        try {
-          await sendMessage(formatAlert(item));
-          onAlert?.(new Date().toISOString());
-        } catch (error) {
-          console.error("777 catalyst alert failed:", error.message);
-        }
-      }
-    }
+    outbox.enqueue(alerts, allowDirectAlerts ? ["marketRecheck", "telegram"] : ["marketRecheck"]);
+    persistState();
+    await outbox.drain();
     return { fresh, alerts };
   }
 
@@ -508,6 +508,8 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       `Score: ${item.score}/100`,
       biases.length ? `Richtung: ${biases.join(", ")}` : "Richtung: noch offen",
       item.keywordHits?.length ? `Treffer: ${item.keywordHits.join(", ")}` : null,
+      item.publishedAt ? `Veröffentlicht: ${item.publishedAt}` : null,
+      item.detectedAt ? `Erkannt: ${item.detectedAt}` : null,
       item.url || null
     ].filter(Boolean).join("\n");
   }
@@ -672,6 +674,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
   }
 
   function start() {
+    startTimer(() => outbox.drain().catch((error) => console.error("777 catalyst delivery failed:", error.message)), 1000, 30000);
     startTimer(scanTrump, 12000, POLL.trump);
     startTimer(scanFed, 18000, POLL.fed);
     startTimer(scanWhiteHouse, 24000, POLL.whitehouse);
@@ -689,11 +692,13 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     scanWhiteHouse,
     scanFederalRegister,
     scanPelosi,
+    drainDeliveries: outbox.drain,
     getState: () => ({
       ...state,
       focus: "commodity-relevant influential statements and official policy",
       displayMaxAgeDays: DISPLAY_MAX_AGE_MS / 86400000,
       persistence: persistenceMode,
+      deliveryStatus: outbox.getStatus(),
       trumpFeedHealth: { ...state.trumpFeedHealth },
       pollingMinutes: {
         trumpTruth: POLL.trump / 60000,

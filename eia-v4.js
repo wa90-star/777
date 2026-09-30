@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const createDeliveryOutbox = require("./delivery-outbox-v1");
 
 const POLL_MS = 5 * 60 * 1000;
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -137,6 +138,18 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     }
   };
 
+  const outbox = createDeliveryOutbox({
+    persist,
+    handlers: {
+      ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {}),
+      telegram: {
+        enabled: telegramConfigured,
+        deliver: ([item]) => sendMessage(formatAlert(item)),
+        onDelivered: () => onAlert?.(new Date().toISOString())
+      }
+    }
+  });
+
   function initStorage() {
     for (const dir of [preferredDir, path.join("/tmp", "777-radar")]) {
       try {
@@ -154,19 +167,22 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
   }
 
   function persist() {
-    if (!storageFile) return;
+    if (!storageFile) return false;
     try {
       const tmp = `${storageFile}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify({
-        version: 1,
+        version: 2,
         savedAt: new Date().toISOString(),
         seen: [...seen.entries()],
         primed,
-        items: state.items.slice(0, 30)
+        items: state.items.slice(0, 30),
+        deliveryOutbox: outbox.snapshot()
       }, null, 2));
       fs.renameSync(tmp, storageFile);
+      return true;
     } catch (error) {
       console.error("777 EIA persist error:", error.message);
+      return false;
     }
   }
 
@@ -184,6 +200,7 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
       state.items = (Array.isArray(parsed.items) ? parsed.items : [])
         .filter((x) => x?.detectedAt && Date.now() - safeTime(x.detectedAt) <= SEEN_MAX_AGE_MS)
         .slice(0, 30);
+      outbox.restore(parsed.deliveryOutbox);
       console.log(`777 EIA state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
       console.error("777 EIA state load error:", error.message);
@@ -264,38 +281,35 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     const cutoff = now - SEEN_MAX_AGE_MS;
     for (const [key, ts] of seen.entries()) if (ts < cutoff) seen.delete(key);
     if (fresh.length) state.items = [...fresh, ...state.items].slice(0, 30);
+    const alerts = fresh.filter((item) => item.priority === "HIGH");
+    outbox.enqueue(alerts, ["marketRecheck", "telegram"]);
     persist();
+    await outbox.drain();
+  }
 
-    const alerts = fresh.filter((item) => item.priority === "HIGH").slice(0, 2);
-    if (alerts.length) {
-      try { onFreshRelevant?.(alerts); } catch (error) { console.error("777 EIA callback failed:", error.message); }
-    }
-
-    if (telegramConfigured()) {
-      for (const item of alerts) {
-        try {
-          const directions = Object.entries(item.directionalBiases || {}).map(([symbol, direction]) => `${symbol} ${direction}`);
-          await sendMessage([
-            "777 EIA-KATALYSATOR",
-            "",
-            item.title,
-            `Score: ${item.score}/100`,
-            directions.length ? `Richtung: ${directions.join(", ")}` : "Richtung: offen · Marktreaktion wird geprüft",
-            item.url || null
-          ].filter(Boolean).join("\n"));
-          onAlert?.(new Date().toISOString());
-        } catch (error) {
-          console.error("777 EIA alert failed:", error.message);
-        }
-      }
-    }
+  function formatAlert(item) {
+    const directions = Object.entries(item.directionalBiases || {}).map(([symbol, direction]) => `${symbol} ${direction}`);
+    return [
+      "777 EIA-KATALYSATOR",
+      "",
+      item.title,
+      `Score: ${item.score}/100`,
+      directions.length ? `Richtung: ${directions.join(", ")}` : "Richtung: offen · Marktreaktion wird geprüft",
+      item.publishedAt ? `Veröffentlicht: ${item.publishedAt}` : null,
+      item.detectedAt ? `Erkannt: ${item.detectedAt}` : null,
+      item.url || null
+    ].filter(Boolean).join("\n");
   }
 
   function start() {
     const first = setTimeout(scan, 28000);
     const timer = setInterval(scan, POLL_MS);
+    const deliveries = setInterval(() => outbox.drain().catch((error) => console.error("777 EIA delivery failed:", error.message)), 30000);
+    const resume = setTimeout(() => outbox.drain().catch((error) => console.error("777 EIA delivery failed:", error.message)), 1000);
     if (typeof first.unref === "function") first.unref();
     if (typeof timer.unref === "function") timer.unref();
+    if (typeof deliveries.unref === "function") deliveries.unref();
+    if (typeof resume.unref === "function") resume.unref();
   }
 
   initStorage();
@@ -304,10 +318,12 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
   return {
     start,
     scan,
+    drainDeliveries: outbox.drain,
     getState: () => ({
       ...state,
       focus: "official US energy releases",
       persistence: persistenceMode,
+      deliveryStatus: outbox.getStatus(),
       pollingMinutes: POLL_MS / 60000
     })
   };

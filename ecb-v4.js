@@ -242,7 +242,7 @@ function createEcbEngine({ onFreshRelevant }) {
           state.items = [...fresh, ...state.items].slice(0, 30);
           persist();
           try {
-            onFreshRelevant?.(fresh);
+            await onFreshRelevant?.(fresh);
           } catch (error) {
             console.error("777 ECB trigger callback failed:", error.message);
           }

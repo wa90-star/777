@@ -1,0 +1,48 @@
+name: Verify portable radar runtime
+
+on:
+  pull_request:
+    paths:
+      - '*.js'
+      - 'test/**'
+      - 'public/**'
+      - 'ops/**'
+      - 'Dockerfile'
+      - 'compose*.yaml'
+      - '.github/workflows/verify-free-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Unit and HTTP integration tests
+        run: npm test
+      - name: Build isolated acceptance image
+        run: docker build -t radar-acceptance:${{ github.sha }} .
+      - name: Prove restart persistence, read-only API and failure detection
+        run: node ops/container-smoke.mjs radar-acceptance:${{ github.sha }}
+      - name: Configure ARM build emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify Oracle Ampere and Raspberry Pi 64-bit image build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          tags: radar-acceptance-arm:${{ github.sha }}
