@@ -16,7 +16,7 @@
 - Free oil-proxy provider: `alpaca-oil-proxy-v1.js`
 - Optional futures provider: `massive-futures-v1.js`
 - Trump/oil anomaly engine: `trump-oil-monitor-v1.js` -> `/data/trump-oil-monitor.json`
-- Radar-2 deterministic decision gate: `decision-engine-v5.js` (side-effect free; not yet the production alert path)
+- Radar-2 deterministic decision gate: `decision-engine-v5.js`; its execution-quality gate is integrated into the production market alert path, while the decision module itself remains side-effect free
 - Kimi approval/import gate: `kimi-research-v1.js` + `scripts/import-kimi-research.js`
 - Kimi shadow store: `research-store-v1.js` -> optional `/data/kimi-research-shadow.json`
 - Dashboard: `public/dashboard-v4.html`
@@ -32,7 +32,7 @@
 - Core scan: 5 minutes during US extended market window (07:00-20:00 America/New_York, weekdays)
 - Context scan: 20 minutes
 - Signal gate: price anomaly + at least one independent directional confirmation
-- Extreme override: GLD, SLV, USO, UNG only
+- Extreme price moves on GLD, SLV, USO and UNG are discovery inputs only; they do not bypass the independent-evidence or execution-quality alert gates
 - Options: GLD, SLV, USO; indicative confirmation only; not a standalone signal
 - Outcome checks: automatic 30m and 2h evaluation, persisted across restarts
 

@@ -15,6 +15,9 @@ function healthyPayloads() {
       telegramConfigured: true,
       marketDataConfigured: true,
       marketDataSource: "alpaca-iex",
+      marketExecutionGate: "decision-engine-v5.executionQuality",
+      extremeOverrideEnabled: false,
+      marketDataMaxAgeMinutes: 5,
       oilDataConfigured: true,
       oilDataScope: "free-etf-proxy-iex",
       futuresDataConfigured: false,
@@ -167,6 +170,19 @@ test("fails closed when Kimi safety isolation is weakened", () => {
     "kimi-production-influence-enabled",
     "kimi-telegram-influence-enabled",
     "kimi-error:invalid-bundle"
+  ]);
+});
+
+
+test("fails closed when hardened market alert invariants regress", () => {
+  const { status, oil } = healthyPayloads();
+  status.marketExecutionGate = "legacy";
+  status.extremeOverrideEnabled = true;
+  status.marketDataMaxAgeMinutes = 30;
+  assert.deepEqual(assessHealth(status, oil), [
+    "market-execution-gate-unexpected",
+    "extreme-override-enabled-or-unknown",
+    "market-data-age-gate-weakened"
   ]);
 });
 
