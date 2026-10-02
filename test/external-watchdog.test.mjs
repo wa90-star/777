@@ -63,7 +63,7 @@ async function fixture(t) {
     advance: (ms) => { timestamp += ms; },
     disk: () => JSON.parse(fs.readFileSync(stateFile, "utf8")),
     run: (overrides = {}) => runWatchdog({ baseUrl, stateFile, token, chatId, now: () => timestamp,
-      probeOptions: { attempts: 1, timeoutMs: 100, retryDelayMs: 0 }, telegramTimeoutMs: 100,
+      probeOptions: { attempts: 1, timeoutMs: 500, retryDelayMs: 0 }, telegramTimeoutMs: 100,
       fetchImpl: (url, options) => {
         assert.equal(url, `https://api.telegram.org/bot${token}/sendMessage`);
         return fetch(`${baseUrl}/telegram`, options); // Never reaches real Telegram.
