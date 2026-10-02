@@ -35,11 +35,22 @@ function verifySnapshot() {
   return result.manifestHash;
 }
 async function ready() {
-  for (let attempt = 0; attempt < 30; attempt++) {
-    try { return JSON.parse(inside("fetch('http://127.0.0.1:3000/api/status',{signal:AbortSignal.timeout(1000)}).then(r=>r.json()).then(x=>console.log(JSON.stringify(x))).catch(()=>process.exit(1))")); }
-    catch { await new Promise(r => setTimeout(r, 300)); }
+  const configured = Number(process.env.RADAR_SMOKE_READY_TIMEOUT_MS || 180000);
+  if (!Number.isInteger(configured) || configured < 5000 || configured > 300000) {
+    throw new Error('Invalid RADAR_SMOKE_READY_TIMEOUT_MS');
   }
-  throw new Error('Container API did not start');
+  const deadline = Date.now() + configured;
+  let attempts = 0;
+  do {
+    attempts += 1;
+    try {
+      return JSON.parse(inside("fetch('http://127.0.0.1:3000/api/status',{signal:AbortSignal.timeout(1500)}).then(r=>r.json()).then(x=>console.log(JSON.stringify(x))).catch(()=>process.exit(1))"));
+    } catch {
+      if (Date.now() >= deadline) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } while (Date.now() < deadline);
+  throw new Error(`Container API did not start within ${configured}ms after ${attempts} probes`);
 }
 let started = false;
 let volumeCreated = false;
