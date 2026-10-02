@@ -96,8 +96,7 @@ try {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       let containerPresent = false;
       try {
-        containerPresent = Boolean(docker('ps', '-aq', '--filter', 'name=^/' + name + '
-));
+        containerPresent = Boolean(docker('ps', '-aq', '--filter', 'name=' + name));
       } catch {}
       if (!containerPresent) break;
       try { docker('rm', '-f', name); } catch {}
