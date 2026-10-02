@@ -11,6 +11,8 @@
 - Runtime: `server-v4.js`
 - Market engine: `market-engine-v4.js`
 - Policy/social catalyst engine: `catalyst-v4.js`
+- Structural supply/demand discovery: `structural-intelligence-v1.js` -> `/data/structural-intelligence.json`
+- Focused equity confirmation engine: `equity-structural-v1.js`
 - Official EIA engine: `eia-v4.js`
 - Persistent signal journal: `signal-journal-v4.js` -> `/data/signal-journal.json`
 - Free oil-proxy provider: `alpaca-oil-proxy-v1.js`
@@ -35,6 +37,21 @@
 - Extreme price moves on GLD, SLV, USO and UNG are discovery inputs only; they do not bypass the independent-evidence or execution-quality alert gates
 - Options: GLD, SLV, USO; indicative confirmation only; not a standalone signal
 - Outcome checks: automatic 30m and 2h evaluation, persisted across restarts
+- Focused equity watchlist default: UUUU, MU, MP, INTC; override with `RADAR_EQUITY_WATCHLIST`, hard-capped at eight symbols
+- Structural discovery interval: 15 minutes by default; override with `STRUCTURAL_SCAN_MINUTES` (10-60 minutes)
+- Structural discovery has no direct Telegram path. A structural event must first be seen across at least two independent publisher groups, then the affected equity must confirm the same direction in live market data and pass the existing execution-quality gate.
+
+## Structural equity intelligence
+
+This layer is designed for developments that are easy to miss in a ticker-only scanner: production-capacity changes, mass-production milestones, supply constraints, export restrictions, new competitive entrants, technology steps, customer/offtake agreements and similar supply-demand shifts.
+
+Google News RSS is used only as a low-cost discovery index. A single article cannot create an alert. Matching reports are clustered by theme, entity and structural mechanism; promotion requires at least two independent publisher groups, a directional hypothesis for a symbol on the focused watchlist and a structural score of at least 70. The promoted event remains a hypothesis until the affected stock confirms the same direction in Alpaca market data. Twelve Data remains fallback-only and cannot bypass the execution-quality gate.
+
+Example: verified CXMT DRAM capacity/technology expansion can create a bearish competition/supply hypothesis for MU. It does not itself create a SHORT alert. Only a same-direction MU price/velocity confirmation with executable market data can do that. The same architecture covers Energy Fuels/rare-earth or uranium progress, MP Materials and Intel-specific structural milestones.
+
+Endpoints:
+- `/api/structural`: raw structural discoveries, verified clusters, source health and verification state
+- `/api/equities`: focused equity watchlist, current structural hypotheses, market confirmation and execution-gate state
 
 ## Kimi research layer
 
@@ -80,8 +97,8 @@ Google Sheet: `SIGNAL_RADAR_MASTER_LOG`
 
 ## Rules
 
-- Commodity-first; do not scan the entire equity market.
-- Do not use general news as the primary trigger when an official/primary source exists.
+- Commodity-first; do not scan the entire equity market. Structural equity monitoring is restricted to the explicit watchlist and hard-capped at eight symbols.
+- Do not use general news as the primary trigger when an official/primary source exists. Secondary news discovery can only promote a structural event after independent multi-publisher confirmation and still requires market confirmation.
 - Avoid duplicate alerts and startup alerts.
 - Do not auto-tune production thresholds before sufficient samples exist.
 - Never turn raw or merely Kimi-produced research into an alert; require an exact packet hash, explicit approval, and the deterministic radar gate.
