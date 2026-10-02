@@ -100,18 +100,6 @@ function marketDataFresh(meta) {
   return ageMs >= -5 * 60 * 1000 && ageMs <= MARKET_DATA_MAX_AGE_MS;
 }
 
-function extremeOverrideDirectionConsistent(text, meta) {
-  if (!String(text || "").startsWith("777 EXTREMES ROHSTOFF-SIGNAL")) return true;
-  const live = liveMarketSignal(meta);
-  const dayMove = Number(live?.percentChange);
-  const velocity = Number(live?.velocityPct);
-  if (!Number.isFinite(dayMove) || !Number.isFinite(velocity)) return false;
-  const wantedSign = meta.direction === "LONG" ? 1 : -1;
-  const dayConflict = Math.abs(dayMove) >= 0.1 && Math.sign(dayMove) !== wantedSign;
-  const velocityConflict = Math.abs(velocity) >= 0.05 && Math.sign(velocity) !== wantedSign;
-  return !dayConflict && !velocityConflict;
-}
-
 function priorMarketDispatch(meta) {
   const key = marketSignalKey(meta);
   const memory = marketDispatchHistory.get(key) || null;
@@ -152,12 +140,6 @@ async function sendMarketTelegramMessage(text) {
     lastMarketDispatchSent = false;
     console.log(`777 stale market alert suppressed: ${key}`);
     return { suppressed: true, reason: "stale-market-data" };
-  }
-  if (!extremeOverrideDirectionConsistent(text, meta)) {
-    marketDispatchDecision.set(key, { sent: false, at: Date.now() });
-    lastMarketDispatchSent = false;
-    console.log(`777 conflicting extreme override suppressed: ${key}`);
-    return { suppressed: true, reason: "directional-conflict" };
   }
   const sent = shouldDispatchMarketAlert(meta);
   marketDispatchDecision.set(key, { sent, at: Date.now() });
@@ -298,10 +280,10 @@ function statusPayload() {
     strategy: [
       "commodity-price-anomalies",
       "correlation-gate-2-independent-confirmations",
-      "extreme-commodity-override-for-gld-slv-uso-ung",
-      "extreme-override-direction-consistency-gate",
+      "extreme-price-discovery-requires-independent-confirmation",
+      "decision-engine-v5-execution-quality-gate",
       "duplicate-signal-suppression-24h-with-confirmation-type-or-move-escalation",
-      "stale-market-data-alert-block-30m",
+      "stale-market-data-alert-block-5m",
       "administrative-catalyst-noise-filter",
       "direction-consistent-catalyst-confirmation",
       "official-eia-energy-catalysts",
@@ -347,7 +329,9 @@ function statusPayload() {
     correlationRequired: marketState.correlationRequired,
     catalystCorrelationMaxAgeMinutes: marketState.catalystCorrelationMaxAgeMinutes,
     contextConfirmationScope: marketState.contextConfirmationScope,
-    extremeOverrideSymbols: marketState.extremeOverrideSymbols,
+    extremeDiscoverySymbols: marketState.extremeDiscoverySymbols,
+    extremeOverrideEnabled: marketState.extremeOverrideEnabled,
+    marketExecutionGate: marketState.executionGate,
     extremeDayMultiplier: marketState.extremeDayMultiplier,
     extremeVelocityMultiplier: marketState.extremeVelocityMultiplier,
     marketRepeatSuppressHours: MARKET_REPEAT_SUPPRESS_MS / 3600000,
@@ -460,7 +444,7 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
-  console.log("777 extreme override: blocked on material day/velocity direction conflict");
+  console.log("777 extreme price moves: discovery only; alert requires independent confirmation and v5 execution quality");
   console.log("777 ECB: official monetary-policy events trigger fresh context + commodity recheck; no blind ECB directional confirmation");
   console.log(`777 Kimi research: ${kimiResearch.getState().mode}; production influence disabled; Telegram influence disabled`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}; ECB ${ecb.getState().persistence}`);

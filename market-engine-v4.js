@@ -691,6 +691,7 @@ function createMarketEngine({
       correlationRequired: CORRELATION_REQUIRED,
       catalystCorrelationMaxAgeMinutes: CATALYST_CORRELATION_MAX_AGE_MS / 60000,
       optionsMode: "indicative-confirmation-only",
+      executionGate: "decision-engine-v5.executionQuality",
       contextConfirmationScope: "gold-silver-directional-only",
       extremeDiscoverySymbols: [...EXTREME_OVERRIDE_SYMBOLS],
       extremeOverrideEnabled: false,
