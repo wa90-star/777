@@ -12,6 +12,7 @@ function healthyPayloads(nowMs = Date.now()) {
     status: {
       system: "777", version: "5.2.1", status: "online", publicApiMode: "read-only",
       telegramConfigured: true, marketDataConfigured: true, marketDataSource: "alpaca-iex",
+      marketExecutionGate: "decision-engine-v5.executionQuality", extremeOverrideEnabled: false, marketDataMaxAgeMinutes: 5,
       oilDataConfigured: true, oilDataScope: "free-etf-proxy-iex", futuresDataConfigured: false,
       futuresDataStatus: "not-configured", futuresDataSource: null, futuresContracts: {},
       journalPersistence: "persistent:/data", catalystPersistence: "persistent:/data",
