@@ -441,7 +441,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`777 v5.2.1 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first + directional correlation gate ${market.getState().correlationRequired} + extreme override + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 focus: commodity-first + independent evidence gate ${market.getState().correlationRequired} + v5 execution quality + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
   console.log("777 extreme price moves: discovery only; alert requires independent confirmation and v5 execution quality");
