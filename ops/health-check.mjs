@@ -57,6 +57,12 @@ export function assessHealth(
   if (status?.telegramConfigured !== true) failures.push("telegram-not-configured");
   if (status?.marketDataConfigured !== true) failures.push("market-data-not-configured");
   if (status?.marketDataSource !== "alpaca-iex") failures.push("market-data-source-unexpected");
+  if (status?.marketExecutionGate !== "decision-engine-v5.executionQuality") {
+    failures.push("market-execution-gate-unexpected");
+  }
+  if (status?.extremeOverrideEnabled !== false) failures.push("extreme-override-enabled-or-unknown");
+  if (!Number.isFinite(status?.marketDataMaxAgeMinutes) || status.marketDataMaxAgeMinutes <= 0
+      || status.marketDataMaxAgeMinutes > 5) failures.push("market-data-age-gate-weakened");
   if (status?.oilDataConfigured !== true) failures.push("oil-data-not-configured");
   if (status?.oilDataScope === "free-etf-proxy-iex") {
     if (status?.futuresDataConfigured !== false) failures.push("oil-proxy-mislabeled-as-futures");
