@@ -158,13 +158,15 @@ jobs:
           # Require exactly one Linux image for each supported architecture.
           jq -e '[.manifests[] | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture] | sort == ["linux/amd64", "linux/arm64"]' "$RUNNER_TEMP/radar-index.json"
           for architecture in amd64 arm64; do
-            docker pull --platform "linux/$architecture" "$reference"
-            image_revision="$(docker image inspect "$reference" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+            platform_digest="$(jq -er --arg architecture "$architecture" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture) | .digest' "$RUNNER_TEMP/radar-index.json")"
+            platform_reference="$IMAGE@$platform_digest"
+            docker pull "$platform_reference"
+            image_revision="$(docker image inspect "$platform_reference" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
             test "$image_revision" = "$REVISION"
             node_arch="$architecture"
             if [ "$architecture" = amd64 ]; then node_arch=x64; fi
             docker run --rm --network none --read-only --platform "linux/$architecture" \
-              --entrypoint node -e "EXPECTED_ARCH=$node_arch" "$reference" \
+              --entrypoint node -e "EXPECTED_ARCH=$node_arch" "$platform_reference" \
               -e 'const assert=require("node:assert/strict"); assert.equal(process.platform,"linux"); assert.equal(process.arch,process.env.EXPECTED_ARCH); assert.equal(require("./package.json").version,"5.2.1"); console.log(JSON.stringify({platform:process.platform,architecture:process.arch,version:require("./package.json").version}));'
           done
           printf 'Verified image: `%s`\n\nPlatforms: `linux/amd64`, `linux/arm64`.\n' "$reference" >> "$GITHUB_STEP_SUMMARY"
