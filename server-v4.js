@@ -1,4 +1,4 @@
-// 777 Signal Radar Pro v5.2.1 - persistent monitoring plus safe Kimi research shadow intake
+// 777 Signal Radar Pro v5.3.0 - persistent monitoring plus safe Kimi research shadow intake
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -9,6 +9,8 @@ const createEcbEngine = require("./ecb-v4");
 const createSignalJournal = require("./signal-journal-v4");
 const createTrumpOilMonitor = require("./trump-oil-monitor-v1");
 const createResearchStore = require("./research-store-v1");
+const createStructuralIntelligence = require("./structural-intelligence-v1");
+const createEquityStructuralEngine = require("./equity-structural-v1");
 const { publicOilScope } = require("./data-scope-v1");
 const { createTelegramTransport, redactError } = require("./telegram-transport-v1");
 const runDeferredMarketRecheck = require("./market-recheck-v1");
@@ -28,6 +30,8 @@ let lastAlertAt = null;
 let journal = null;
 let market = null;
 let oilMonitor = null;
+let structural = null;
+let equityStructural = null;
 const kimiResearch = createResearchStore();
 kimiResearch.load();
 
@@ -184,6 +188,23 @@ function recordMarketSignal(entry) {
   return journal?.record(entry);
 }
 
+function allowedQuoteSymbols() {
+  return [...new Set([...ALLOWED_QUOTES, ...(equityStructural?.getState()?.watchlist || [])])];
+}
+
+function queueStructuralEquityRecheck(items) {
+  if (!items?.length || !equityStructural) return Promise.resolve({ suppressed: true, reason: "no-verified-structural-event" });
+  console.log(`777 structural equity recheck queued: ${items.length} verified structural event(s); market-window and execution gates retained`);
+  return Promise.resolve()
+    .then(() => equityStructural.run())
+    .catch((error) => {
+      const message = redactError(error, [TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+        process.env.APCA_API_KEY_ID, process.env.APCA_API_SECRET_KEY, process.env.TWELVE]);
+      console.error("777 structural equity recheck failed:", message);
+      throw new Error(message);
+    });
+}
+
 function queueMarketRecheck(items, source, refreshContext = false) {
   if (items?.length) console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); context refresh ${refreshContext ? "on" : "off"}; market-window gate retained`);
   return runDeferredMarketRecheck({ market, items, refreshContext }).catch((error) => {
@@ -213,31 +234,38 @@ const ecb = createEcbEngine({
   onFreshRelevant: (items) => queueMarketRecheck(items, "ECB", true)
 });
 
+structural = createStructuralIntelligence({
+  onFreshRelevant: queueStructuralEquityRecheck
+});
+
 function combinedCatalystState() {
   const policy = catalysts.getState();
   const energy = eia.getState();
   const euro = ecb.getState();
-  const items = [...(policy.items || []), ...(energy.items || []), ...(euro.items || [])]
+  const structuralState = structural?.getState() || { verified: [], sources: {}, lastScanAt: null };
+  const items = [...(policy.items || []), ...(energy.items || []), ...(euro.items || []), ...(structuralState.verified || [])]
     .sort((a, b) => new Date(b.detectedAt || b.publishedAt || 0).getTime() - new Date(a.detectedAt || a.publishedAt || 0).getTime())
     .slice(0, 50);
-  const scanTimes = [policy.lastScanAt, energy.lastScanAt, euro.lastScanAt]
+  const scanTimes = [policy.lastScanAt, energy.lastScanAt, euro.lastScanAt, structuralState.lastScanAt]
     .filter(Boolean)
     .map((x) => new Date(x).getTime())
     .filter(Number.isFinite);
   return {
     items,
     lastScanAt: scanTimes.length ? new Date(Math.max(...scanTimes)).toISOString() : null,
-    sources: { ...(policy.sources || {}), ...(energy.sources || {}), ...(euro.sources || {}) },
-    focus: "commodity-relevant policy, official US energy releases and official ECB monetary-policy events",
+    sources: { ...(policy.sources || {}), ...(energy.sources || {}), ...(euro.sources || {}), ...(structuralState.sources || {}) },
+    focus: "commodity policy plus verified structural supply/demand events for the focused equity watchlist",
     persistence: {
       policy: policy.persistence,
       eia: energy.persistence,
-      ecb: euro.persistence
+      ecb: euro.persistence,
+      structural: structuralState.persistence
     },
     pollingMinutes: {
       ...(policy.pollingMinutes || {}),
       eiaOfficial: energy.pollingMinutes,
-      europeanCentralBank: euro.pollingMinutes
+      europeanCentralBank: euro.pollingMinutes,
+      structuralSupplyDemand: structuralState.pollingMinutes
     }
   };
 }
@@ -258,6 +286,15 @@ market = createMarketEngine({
   onCoreScan: (signals) => journal?.observe(signals)
 });
 
+equityStructural = createEquityStructuralEngine({
+  sendMessage: sendTelegramMessage,
+  telegramConfigured,
+  getStructuralState: () => structural.getState(),
+  recentSignalAlert: (symbol, direction, maxAgeMs) => journal?.recentAlertFor(symbol, direction, maxAgeMs) || null,
+  onSignalAlert: (entry) => journal?.record(entry),
+  onAlert: recordAlert
+});
+
 journal = createSignalJournal({ quote: market.quote });
 const latestRecordedSignal = journal.getState().entries?.[0];
 if (latestRecordedSignal?.createdAt) lastAlertAt = latestRecordedSignal.createdAt;
@@ -268,6 +305,8 @@ function statusPayload() {
   const policyState = catalysts.getState();
   const eiaState = eia.getState();
   const ecbState = ecb.getState();
+  const structuralState = structural.getState();
+  const equityState = equityStructural.getState();
   const journalState = journal.getState();
   const oilState = oilMonitor.getState();
   const oilScope = publicOilScope(oilState);
@@ -275,10 +314,12 @@ function statusPayload() {
     system: "777",
     version: "5.2.1",
     status: "online",
-    focus: "commodity-first",
+    focus: "commodity-first + focused structural-equity confirmation",
     publicApiMode: "read-only",
     strategy: [
       "commodity-price-anomalies",
+      "structural-supply-demand-discovery-two-independent-publishers",
+      "focused-equity-structural-event-plus-price-confirmation",
       "correlation-gate-2-independent-confirmations",
       "extreme-price-discovery-requires-independent-confirmation",
       "decision-engine-v5-execution-quality-gate",
@@ -323,7 +364,11 @@ function statusPayload() {
     marketWindowOpen: marketState.marketWindowOpen,
     coreSymbols: marketState.coreSymbols,
     contextSymbols: marketState.contextSymbols,
-    allowedQuoteSymbols: [...ALLOWED_QUOTES],
+    allowedQuoteSymbols: allowedQuoteSymbols(),
+    equityWatchlist: equityState.watchlist,
+    equityStructuralEvidenceRule: equityState.evidenceRule,
+    equityStructuralScanIntervalMinutes: equityState.scanIntervalMinutes,
+    equityStructuralLastError: equityState.lastError,
     coreIntervalMinutes: marketState.coreIntervalMinutes,
     contextIntervalMinutes: marketState.contextIntervalMinutes,
     correlationRequired: marketState.correlationRequired,
@@ -345,6 +390,8 @@ function statusPayload() {
     lastPolicyScanAt: policyState.lastScanAt,
     lastEiaScanAt: eiaState.lastScanAt,
     lastEcbScanAt: ecbState.lastScanAt,
+    lastStructuralScanAt: structuralState.lastScanAt,
+    lastEquityStructuralScanAt: equityState.lastScanAt,
     lastOptionsScanAt: marketState.lastOptionsScanAt,
     lastAlertAt,
     journalStats: journalState.stats,
@@ -352,6 +399,7 @@ function statusPayload() {
     catalystPersistence: policyState.persistence,
     eiaPersistence: eiaState.persistence,
     ecbPersistence: ecbState.persistence,
+    structuralPersistence: structuralState.persistence,
     calibration: journalState.calibration,
     sourceStatus: catalystState.sources,
     kimiResearch: kimiResearch.getState(),
@@ -411,6 +459,8 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/catalysts") return sendJson(res, 200, combinedCatalystState());
     if (requestUrl.pathname === "/api/eia") return sendJson(res, 200, eia.getState());
     if (requestUrl.pathname === "/api/ecb") return sendJson(res, 200, ecb.getState());
+    if (requestUrl.pathname === "/api/structural") return sendJson(res, 200, structural.getState());
+    if (requestUrl.pathname === "/api/equities") return sendJson(res, 200, equityStructural.getState());
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
     if (requestUrl.pathname === "/api/oil-monitor") return sendJson(res, 200, oilMonitor.getState());
 
@@ -421,8 +471,9 @@ const server = http.createServer(async (req, res) => {
 
     if (requestUrl.pathname === "/api/quote") {
       const symbol = (requestUrl.searchParams.get("symbol") || "GLD").trim().toUpperCase();
-      if (!ALLOWED_QUOTES.has(symbol)) {
-        return sendJson(res, 400, { error: "Symbol outside focused radar scope", allowed: [...ALLOWED_QUOTES] });
+      const allowed = new Set(allowedQuoteSymbols());
+      if (!allowed.has(symbol)) {
+        return sendJson(res, 400, { error: "Symbol outside focused radar scope", allowed: [...allowed] });
       }
       try {
         return sendJson(res, 200, { system: "777", data: await market.quote(symbol), time: new Date().toISOString() });
@@ -440,15 +491,18 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v5.2.1 running on port ${PORT}`);
-  console.log(`777 focus: commodity-first + independent evidence gate ${market.getState().correlationRequired} + v5 execution quality + EIA + ECB; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
+  console.log(`777 v5.3.0 running on port ${PORT}`);
+  console.log(`777 focus: commodity-first + structural-equity watchlist ${equityStructural.getState().watchlist.join(",")} + independent evidence gates + v5 execution quality; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);
   console.log("777 extreme price moves: discovery only; alert requires independent confirmation and v5 execution quality");
   console.log("777 ECB: official monetary-policy events trigger fresh context + commodity recheck; no blind ECB directional confirmation");
+  console.log(`777 structural intelligence: ${structural.getState().verificationRule}; direct discovery alerts disabled`);
   console.log(`777 Kimi research: ${kimiResearch.getState().mode}; production influence disabled; Telegram influence disabled`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}; ECB ${ecb.getState().persistence}`);
   market.start();
+  equityStructural.start();
+  structural.start();
   catalysts.start();
   eia.start();
   ecb.start();
