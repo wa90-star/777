@@ -141,3 +141,31 @@ test("returns null rather than negative or invented latency", () => {
     detectedAt: "2026-09-22T14:01:00Z"
   }).sourceLatencyMs, null);
 });
+
+
+test("source lineage collapses syndicated evidence from the same origin event", () => {
+  const result = decide({
+    ...CANDIDATE,
+    confirmationCategories: ["official", "media"],
+    confirmationEvidence: [
+      { category: "official", originEventId: "EF-2026-001", publisher: "energy fuels" },
+      { category: "media", originEventId: "EF-2026-001", publisher: "wire mirror" }
+    ]
+  }, QUOTE, NOW);
+  assert.equal(result.independentCategories, 1);
+  assert.equal(result.pass, false);
+  assert.ok(result.reasons.includes("INSUFFICIENT_INDEPENDENT_CATEGORIES"));
+});
+
+test("two distinct origin events may count independently even inside one broad category", () => {
+  const result = decide({
+    ...CANDIDATE,
+    confirmationCategories: ["official"],
+    confirmationEvidence: [
+      { category: "official", originEventId: "agency-order" },
+      { category: "official", originEventId: "company-contract" }
+    ]
+  }, QUOTE, NOW);
+  assert.equal(result.independentCategories, 2);
+  assert.equal(result.independencePass, true);
+});

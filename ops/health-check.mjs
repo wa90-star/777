@@ -161,7 +161,8 @@ export async function probe({
   expectedPersistencePath = process.env.RADAR_EXPECTED_PERSISTENCE_PATH || DEFAULT_EXPECTED_PERSISTENCE_PATH,
   attempts = Number(process.env.RADAR_HEALTH_ATTEMPTS || 3),
   timeoutMs = Number(process.env.RADAR_HEALTH_TIMEOUT_MS || 12000),
-  retryDelayMs = Number(process.env.RADAR_HEALTH_RETRY_DELAY_MS || 8000)
+  retryDelayMs = Number(process.env.RADAR_HEALTH_RETRY_DELAY_MS || 8000),
+  now = Date.now
 } = {}) {
   for (const [name, value, min, max] of [["attempts", attempts, 1, 5], ["timeoutMs", timeoutMs, 1, 30000], ["retryDelayMs", retryDelayMs, 0, 60000]]) {
     if (!Number.isInteger(value) || value < min || value > max) throw new Error(`Invalid ${name}: expected integer ${min}..${max}`);
@@ -181,11 +182,11 @@ export async function probe({
       const failedRequests = responses.filter((result) => result.status === "rejected");
       if (failedRequests.length) throw new Error(failedRequests.map((result) => result.reason.message).join("; "));
       const [status, oil] = responses.map((result) => result.value);
-      const failures = assessHealth(status, oil, { minimumVersion, expectedPersistencePath });
+      const failures = assessHealth(status, oil, { minimumVersion, expectedPersistencePath, nowMs: now() });
       if (!failures.length) {
         return {
           ok: true,
-          checkedAt: new Date().toISOString(),
+          checkedAt: new Date(now()).toISOString(),
           baseUrl: base.origin,
           version: status.version,
           oilSource: oil.source,
@@ -201,7 +202,7 @@ export async function probe({
 
   return {
     ok: false,
-    checkedAt: new Date().toISOString(),
+    checkedAt: new Date(now()).toISOString(),
     baseUrl: base.origin,
     errors
   };

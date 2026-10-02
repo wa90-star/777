@@ -1,3 +1,5 @@
+const { executionQuality } = require("./decision-engine-v5");
+
 const CORE = {
   GLD: { name: "Gold", day: 1.2, velocity: 0.55 },
   SLV: { name: "Silver", day: 1.8, velocity: 0.80 },
@@ -34,6 +36,36 @@ const CONTEXT_CORRELATION_MAX_AGE_MS = 30 * 60 * 1000;
 const CORRELATION_REQUIRED = 2;
 const EXTREME_DAY_MULTIPLIER = 2.5;
 const EXTREME_VELOCITY_MULTIPLIER = 2.0;
+
+const CONFIRMATION_INDEPENDENCE_GROUP = Object.freeze({
+  price: "market-price",
+  options: "market-derivatives",
+  context: "cross-asset-market",
+  catalyst: "fundamental-catalyst"
+});
+
+function confirmationSummary(confirmations = []) {
+  const groups = [...new Set(confirmations
+    .map((item) => item?.independenceGroup || CONFIRMATION_INDEPENDENCE_GROUP[item?.type] || null)
+    .filter(Boolean))];
+  return { groups, count: groups.length, qualified: groups.length >= CORRELATION_REQUIRED };
+}
+
+function marketPhaseAt(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", hour12: false,
+    hour: "2-digit", minute: "2-digit"
+  }).formatToParts(date);
+  const weekday = parts.find((p) => p.type === "weekday")?.value;
+  if (weekday === "Sat" || weekday === "Sun") return "closed";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  const minutes = hour * 60 + minute;
+  if (minutes >= 9 * 60 + 30 && minutes < 16 * 60) return "regular";
+  if (minutes >= 7 * 60 && minutes < 9 * 60 + 30) return "premarket";
+  if (minutes >= 16 * 60 && minutes <= 20 * 60) return "afterhours";
+  return "closed";
+}
 
 function timeoutSignal(ms) {
   const controller = new AbortController();
@@ -74,19 +106,7 @@ function opposite(direction) {
 }
 
 function marketWindowOpen() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit"
-  }).formatToParts(new Date());
-  const weekday = parts.find((p) => p.type === "weekday")?.value;
-  if (weekday === "Sat" || weekday === "Sun") return false;
-  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
-  const minutes = hour * 60 + minute;
-  return minutes >= 7 * 60 && minutes <= 20 * 60;
+  return marketPhaseAt() !== "closed";
 }
 
 function createMarketEngine({
@@ -194,6 +214,7 @@ function createMarketEngine({
     const prevDaily = pick(snapshot, "prevDailyBar", "previous_daily_bar") || pick(snapshot, "previousDailyBar", "previous_daily_bar") || {};
     const bid = num(latestQuote?.bp ?? latestQuote?.bid_price);
     const ask = num(latestQuote?.ap ?? latestQuote?.ask_price);
+    const quoteTime = latestQuote?.t ?? latestQuote?.timestamp ?? null;
     const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
     const price = num(latestTrade?.p ?? latestTrade?.price) || num(daily.c ?? daily.close) || mid;
     const previousClose = num(prevDaily.c ?? prevDaily.close);
@@ -233,12 +254,26 @@ function createMarketEngine({
       : extremeVelocity
         ? `Kurzfristbewegung ${round(velocityRatio, 1)}x Schwelle`
         : null;
+    const execution = direction === "KEIN SIGNAL"
+      ? { plausible: false, failures: ["NO_DIRECTION"], reference: null, spreadPct: null, ageMs: null, phase: marketPhaseAt() }
+      : executionQuality({ bid, ask, last: price, quoteTime, phase: marketPhaseAt(), direction }, Date.now());
 
     return {
       symbol,
       name: config.name,
       kind,
       price: round(price, price < 20 ? 3 : 2),
+      bid: round(bid, bid < 20 ? 3 : 2),
+      ask: round(ask, ask < 20 ? 3 : 2),
+      quoteTime,
+      executionQuality: {
+        plausible: execution.plausible,
+        failures: execution.failures,
+        spreadPct: execution.spreadPct,
+        ageMs: execution.ageMs,
+        phase: execution.phase,
+        reference: execution.reference
+      },
       previousClose: round(previousClose, 2),
       percentChange: round(dayPct, 2),
       velocityPct: round(velocityPct, 2),
@@ -329,38 +364,43 @@ function createMarketEngine({
   }
 
   function correlationFor(signal) {
-    const confirmations = [{ type: "price", label: "Rohstoffbewegung", weight: 1 }];
+    const confirmations = [{ type: "price", independenceGroup: "market-price", label: "Rohstoffbewegung", weight: 1 }];
     const catalyst = recentCatalystFor(signal);
     const option = directionalOptionFor(signal);
     const context = directionalContextFor(signal);
 
     if (catalyst) confirmations.push({
       type: "catalyst",
+      independenceGroup: "fundamental-catalyst",
       label: `${catalyst.source} · ${signal.direction}`,
       weight: 1,
       detail: catalyst.title
     });
     if (option) confirmations.push({
       type: "options",
+      independenceGroup: "market-derivatives",
       label: `${option.side} ~$${Math.round(option.notional).toLocaleString("en-US")}`,
       weight: 1,
       detail: option.contract
     });
     if (context) confirmations.push({
       type: "context",
+      independenceGroup: "cross-asset-market",
       label: `${context.symbol} ${context.direction} · ${context.relation === "inverse" ? "inverse" : "gleichgerichtet"}`,
       weight: 1,
       detail: `${context.percentChange}% · Score ${context.score}`
     });
 
-    const count = confirmations.reduce((sum, x) => sum + x.weight, 0);
-    const correlated = count >= CORRELATION_REQUIRED;
+    const independent = confirmationSummary(confirmations);
+    const count = independent.count;
+    const correlated = independent.qualified;
     return {
       count,
       required: CORRELATION_REQUIRED,
       qualified: correlated,
-      extremeOverride: Boolean(signal.extreme && !correlated),
-      alertQualified: correlated || Boolean(signal.extreme),
+      independentGroups: independent.groups,
+      extremeOverride: false,
+      alertQualified: correlated,
       labels: confirmations.map((x) => x.label),
       confirmations,
       catalyst: catalyst ? {
@@ -412,9 +452,7 @@ function createMarketEngine({
     const velocity = signal.velocityMinutes == null
       ? "noch keine Vergleichsmessung"
       : `${signal.velocityPct >= 0 ? "+" : ""}${signal.velocityPct.toFixed(2)}% / ${signal.velocityMinutes} min`;
-    const headline = correlation.extremeOverride
-      ? "777 EXTREMES ROHSTOFF-SIGNAL"
-      : "777 KORRELIERTES ROHSTOFF-SIGNAL";
+    const headline = "777 KORRELIERTES ROHSTOFF-SIGNAL";
     return [
       headline,
       "",
@@ -423,7 +461,7 @@ function createMarketEngine({
       `Tagesbewegung: ${sign}${signal.percentChange.toFixed(2)}%`,
       `Kurzfristig: ${velocity}`,
       `Score: ${signal.score}/100`,
-      `Bestätigungen: ${correlation.count}/${correlation.required}${correlation.extremeOverride ? " · EXTREM-AUSNAHME" : ""}`,
+      `Unabhängige Evidenzgruppen: ${correlation.count}/${correlation.required}`,
       signal.extremeReason ? `Extremgrund: ${signal.extremeReason}` : null,
       ...correlation.labels.map((x) => `• ${x}`),
       `Quelle Preis: ${signal.source}`
@@ -435,6 +473,7 @@ function createMarketEngine({
     if (!telegramConfigured()) return;
     const candidates = signals
       .filter((s) => s.direction !== "KEIN SIGNAL" && (s.priority === "HIGH" || s.extreme))
+      .filter((s) => s.executionQuality?.plausible === true)
       .sort((a, b) => b.score - a.score);
 
     for (const signal of candidates) {
@@ -445,7 +484,8 @@ function createMarketEngine({
         qualified: correlation.qualified,
         extremeOverride: correlation.extremeOverride,
         alertQualified: correlation.alertQualified,
-        labels: correlation.labels
+        labels: correlation.labels,
+        independentGroups: correlation.independentGroups
       };
       state.correlations.push({
         symbol: signal.symbol,
@@ -651,8 +691,10 @@ function createMarketEngine({
       correlationRequired: CORRELATION_REQUIRED,
       catalystCorrelationMaxAgeMinutes: CATALYST_CORRELATION_MAX_AGE_MS / 60000,
       optionsMode: "indicative-confirmation-only",
+      executionGate: "decision-engine-v5.executionQuality",
       contextConfirmationScope: "gold-silver-directional-only",
-      extremeOverrideSymbols: [...EXTREME_OVERRIDE_SYMBOLS],
+      extremeDiscoverySymbols: [...EXTREME_OVERRIDE_SYMBOLS],
+      extremeOverrideEnabled: false,
       extremeDayMultiplier: EXTREME_DAY_MULTIPLIER,
       extremeVelocityMultiplier: EXTREME_VELOCITY_MULTIPLIER,
       alpacaConfigured: alpacaConfigured()
@@ -661,3 +703,4 @@ function createMarketEngine({
 }
 
 module.exports = createMarketEngine;
+module.exports._test = { confirmationSummary, marketPhaseAt };

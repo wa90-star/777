@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { runWatchdog } from "../ops/external-watchdog.mjs";
 
-function healthyPayloads() {
-  const source = () => ({ ok: true, error: null, warning: null, lastScanAt: new Date().toISOString() });
+function healthyPayloads(nowMs = Date.now()) {
+  const source = () => ({ ok: true, error: null, warning: null, lastScanAt: new Date(nowMs).toISOString() });
   return {
     status: {
       system: "777", version: "5.2.1", status: "online", publicApiMode: "read-only",
@@ -50,7 +50,7 @@ async function fixture(t) {
     f.probeRequests.push(req.url);
     if (f.stallProbe) return;
     if (!f.healthy) { res.writeHead(404); return res.end("not found"); }
-    const payloads = healthyPayloads();
+    const payloads = healthyPayloads(timestamp);
     f.modifyPayloads?.(payloads);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(req.url === "/api/status" ? payloads.status : payloads.oil));
@@ -63,7 +63,7 @@ async function fixture(t) {
     advance: (ms) => { timestamp += ms; },
     disk: () => JSON.parse(fs.readFileSync(stateFile, "utf8")),
     run: (overrides = {}) => runWatchdog({ baseUrl, stateFile, token, chatId, now: () => timestamp,
-      probeOptions: { attempts: 1, timeoutMs: 100, retryDelayMs: 0 }, telegramTimeoutMs: 100,
+      probeOptions: { attempts: 1, timeoutMs: 500, retryDelayMs: 0 }, telegramTimeoutMs: 100,
       fetchImpl: (url, options) => {
         assert.equal(url, `https://api.telegram.org/bot${token}/sendMessage`);
         return fetch(`${baseUrl}/telegram`, options); // Never reaches real Telegram.
@@ -80,7 +80,8 @@ async function fixture(t) {
 test("healthy baseline stays silent and reuses every existing health check", async (t) => {
   const f = await fixture(t);
   f.healthy = true;
-  assert.equal((await f.run()).notification, "none");
+  const baseline = await f.run();
+  assert.equal(baseline.notification, "none", JSON.stringify({ baseline, state: f.disk(), requests: f.probeRequests }));
   assert.equal(f.messages.length, 0);
   assert.equal(f.disk().incident, null);
   assert.equal(fs.statSync(f.stateFile).mode & 0o077, 0);

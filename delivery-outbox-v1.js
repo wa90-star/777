@@ -1,3 +1,10 @@
+function providerReceipt(result) {
+  if (!result || typeof result !== "object") return null;
+  const messageId = result.message_id ?? result.messageId ?? null;
+  if (messageId == null) return null;
+  return { messageId: String(messageId) };
+}
+
 // The containing engine persists this snapshot together with its seen IDs.
 // Telegram has no idempotency key: a lost response can still cause a duplicate
 // after retry. Successful acknowledgements are never deliberately resent.
@@ -96,6 +103,7 @@ function createDeliveryOutbox({
           const d = entry.deliveries[name];
           d.status = result?.suppressed ? "suppressed" : "sent";
           d.acknowledgedAt = new Date(now()).toISOString();
+          d.providerReceipt = result?.suppressed ? null : providerReceipt(result);
           d.error = null;
         }
         if (!save()) return;
