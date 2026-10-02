@@ -192,3 +192,16 @@ test("concurrent drains share one delivery and suppression is not reported as se
   assert.equal(h.outbox.getStatus().suppressed, 1);
   assert.equal(h.outbox.getStatus().sent, 0);
 });
+
+
+test("persists and restores provider delivery receipt", async () => {
+  const h = harness({ handlers: { telegram: { deliver: async () => ({ message_id: 4242 }) } } });
+  h.outbox.enqueue([{ id: "receipt-event" }], ["telegram"]);
+  await h.outbox.drain();
+  assert.deepEqual(h.disk[0].deliveries.telegram.providerReceipt, { messageId: "4242" });
+  assert.ok(h.disk[0].deliveries.telegram.acknowledgedAt);
+  h.restart();
+  const restored = h.outbox.snapshot()[0].deliveries.telegram;
+  assert.equal(restored.status, "sent");
+  assert.deepEqual(restored.providerReceipt, { messageId: "4242" });
+});
