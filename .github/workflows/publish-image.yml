@@ -141,7 +141,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/wa90-star/777
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=5.2.1
+            org.opencontainers.image.version=5.3.0
           cache-from: |
             type=gha,scope=radar-amd64
             type=gha,scope=radar-arm64
@@ -171,6 +171,6 @@ jobs:
             if [ "$architecture" = amd64 ]; then node_arch=x64; fi
             docker run --rm --network none --read-only --platform "linux/$architecture" \
               --entrypoint node -e "EXPECTED_ARCH=$node_arch" "$platform_reference" \
-              -e 'const assert=require("node:assert/strict"); assert.equal(process.platform,"linux"); assert.equal(process.arch,process.env.EXPECTED_ARCH); assert.equal(require("./package.json").version,"5.2.1"); console.log(JSON.stringify({platform:process.platform,architecture:process.arch,version:require("./package.json").version}));'
+              -e 'const assert=require("node:assert/strict"); assert.equal(process.platform,"linux"); assert.equal(process.arch,process.env.EXPECTED_ARCH); assert.equal(require("./package.json").version,"5.3.0"); console.log(JSON.stringify({platform:process.platform,architecture:process.arch,version:require("./package.json").version}));'
           done
           printf 'Verified image: `%s`\n\nPlatforms: `linux/amd64`, `linux/arm64`.\n' "$reference" >> "$GITHUB_STEP_SUMMARY"
