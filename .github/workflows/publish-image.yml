@@ -8,6 +8,7 @@ on:
       - "*.js"
       - "scripts/**"
       - "public/**"
+      - "ops/**"
       - "package.json"
       - "Dockerfile"
       - ".dockerignore"
@@ -47,6 +48,9 @@ jobs:
 
       - name: Run fail-closed test suite
         run: npm test
+
+      - name: Syntax-check isolated acceptance script
+        run: node --check ops/container-smoke.mjs
 
   verify-platform:
     needs: test

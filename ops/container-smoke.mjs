@@ -89,6 +89,32 @@ try {
   assert.ok(failures.includes('market-data-not-configured'));
   console.log(JSON.stringify({ result: 'PASS', tests: ['real-container-start', 'opt-in-prestart-backup', 'outbox-backup-integrity', 'backup-restart-idempotence', 'public-api-read-only', 'non-root-data-write', 'restart-persistence', 'missing-providers-fail-health', 'kimi-isolation'], scope: 'isolated-container-no-live-provider-or-Telegram-proof' }));
 } finally {
-  try { if (started) docker('stop', '--time', '15', name); }
-  finally { if (volumeCreated) docker('volume', 'rm', volume); } // Only this invocation's isolated volume.
+  // Docker --rm removes a stopped emulated container asynchronously. Under QEMU
+  // the volume can remain "in use" briefly after a successful smoke test.
+  if (started) {
+    try { docker('stop', '--time', '15', name); } catch {}
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      let containerPresent = false;
+      try {
+        containerPresent = Boolean(docker('ps', '-aq', '--filter', 'name=' + name));
+      } catch {}
+      if (!containerPresent) break;
+      try { docker('rm', '-f', name); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  if (volumeCreated) {
+    let removed = false;
+    let lastError = null;
+    for (let attempt = 0; attempt < 30 && !removed; attempt += 1) {
+      try {
+        docker('volume', 'rm', volume);
+        removed = true;
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    if (!removed) throw lastError || new Error('Acceptance volume cleanup failed');
+  }
 }
