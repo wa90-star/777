@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { runWatchdog } from "../ops/external-watchdog.mjs";
 
-function healthyPayloads() {
-  const source = () => ({ ok: true, error: null, warning: null, lastScanAt: new Date().toISOString() });
+function healthyPayloads(nowMs = Date.now()) {
+  const source = () => ({ ok: true, error: null, warning: null, lastScanAt: new Date(nowMs).toISOString() });
   return {
     status: {
       system: "777", version: "5.2.1", status: "online", publicApiMode: "read-only",
@@ -50,7 +50,7 @@ async function fixture(t) {
     f.probeRequests.push(req.url);
     if (f.stallProbe) return;
     if (!f.healthy) { res.writeHead(404); return res.end("not found"); }
-    const payloads = healthyPayloads();
+    const payloads = healthyPayloads(timestamp);
     f.modifyPayloads?.(payloads);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(req.url === "/api/status" ? payloads.status : payloads.oil));

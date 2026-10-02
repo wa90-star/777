@@ -94,7 +94,7 @@ export async function runWatchdog({
   let health;
   try {
     // The exact existing health contract is reused; no relaxed source thresholds.
-    health = await probe({ ...probeOptions, baseUrl: target });
+    health = await probe({ ...probeOptions, baseUrl: target, now });
   } catch (error) {
     health = { ok: false, errors: [`probe-error:${redact(error)}`] };
   }
