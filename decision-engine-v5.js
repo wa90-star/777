@@ -124,6 +124,28 @@ function normalizedCategories(values) {
     .filter(Boolean))];
 }
 
+function evidenceIndependence(values) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const groups = [];
+  for (const raw of values) {
+    if (!raw || typeof raw !== "object") continue;
+    const category = String(raw.category || raw.type || "").trim().toLowerCase();
+    const originEventId = String(raw.originEventId || "").trim().toLowerCase();
+    const contentFingerprint = String(raw.contentFingerprint || "").trim().toLowerCase();
+    const lineageId = String(raw.sourceLineageId || "").trim().toLowerCase();
+    const publisher = String(raw.publisher || "").trim().toLowerCase();
+    let key = "";
+    if (originEventId) key = `origin:${originEventId}`;
+    else if (contentFingerprint) key = `fingerprint:${contentFingerprint}`;
+    else if (lineageId) key = `lineage:${lineageId}`;
+    else if (publisher && category) key = `publisher:${publisher}:${category}`;
+    else if (category) key = `category:${category}`;
+    if (key) groups.push(key);
+  }
+  const unique = [...new Set(groups)];
+  return { groups: unique, count: unique.length };
+}
+
 function decide(candidate = {}, quote = {}, now = Date.now(), limits = {}) {
   const direction = String(candidate.direction || "").toUpperCase();
   const information = informationGate({ ...candidate, direction });
@@ -135,11 +157,13 @@ function decide(candidate = {}, quote = {}, now = Date.now(), limits = {}) {
     execution: execution.plausible && candidate.execution !== false
   });
   const categories = normalizedCategories(candidate.confirmationCategories);
+  const evidence = evidenceIndependence(candidate.confirmationEvidence);
+  const independentGroups = evidence ? evidence.groups : categories;
   const confidence = String(candidate.confidence || "").trim().toUpperCase();
   const confidencePass = ["MITTEL", "MEDIUM", "HOCH", "HIGH"].includes(confidence);
   const counterSignalVeto = candidate.equalStrengthCounterSignal === true;
   const mechanicalException = candidate.finalOfficialMechanicalForcedFlow === true;
-  const independencePass = categories.length >= 2 || mechanicalException;
+  const independencePass = independentGroups.length >= 2 || mechanicalException;
   const reasons = [
     ...information.failures,
     ...execution.failures,
@@ -163,7 +187,8 @@ function decide(candidate = {}, quote = {}, now = Date.now(), limits = {}) {
     wave2: wave2Result,
     score,
     confirmationCategories: categories,
-    independentCategories: categories.length,
+    independentEvidenceGroups: independentGroups,
+    independentCategories: independentGroups.length,
     independencePass,
     mechanicalException,
     counterSignalVeto,
@@ -195,5 +220,6 @@ module.exports = {
   informationGate,
   latency,
   score9,
-  wave2
+  wave2,
+  evidenceIndependence
 };
