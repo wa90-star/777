@@ -8,6 +8,7 @@ on:
       - "*.js"
       - "scripts/**"
       - "public/**"
+      - "ops/**"
       - "package.json"
       - "Dockerfile"
       - ".dockerignore"
