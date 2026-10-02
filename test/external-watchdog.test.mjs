@@ -80,7 +80,8 @@ async function fixture(t) {
 test("healthy baseline stays silent and reuses every existing health check", async (t) => {
   const f = await fixture(t);
   f.healthy = true;
-  assert.equal((await f.run()).notification, "none");
+  const baseline = await f.run();
+  assert.equal(baseline.notification, "none", JSON.stringify({ baseline, state: f.disk(), requests: f.probeRequests }));
   assert.equal(f.messages.length, 0);
   assert.equal(f.disk().incident, null);
   assert.equal(fs.statSync(f.stateFile).mode & 0o077, 0);
