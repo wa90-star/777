@@ -11,6 +11,7 @@ const createTrumpOilMonitor = require("./trump-oil-monitor-v1");
 const createResearchStore = require("./research-store-v1");
 const createStructuralIntelligence = require("./structural-intelligence-v1");
 const createEquityStructuralEngine = require("./equity-structural-v1");
+const createHouseDisclosures = require("./house-disclosures-v1");
 const { publicOilScope } = require("./data-scope-v1");
 const { createTelegramTransport, redactError } = require("./telegram-transport-v1");
 const runDeferredMarketRecheck = require("./market-recheck-v1");
@@ -34,6 +35,7 @@ let structural = null;
 let equityStructural = null;
 const kimiResearch = createResearchStore();
 kimiResearch.load();
+const houseDisclosures = createHouseDisclosures();
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -403,6 +405,7 @@ function statusPayload() {
     calibration: journalState.calibration,
     sourceStatus: catalystState.sources,
     kimiResearch: kimiResearch.getState(),
+    politicianDisclosures: (({ items, ...health }) => health)(houseDisclosures.getState()),
     time: new Date().toISOString()
   };
 }
@@ -461,6 +464,7 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/ecb") return sendJson(res, 200, ecb.getState());
     if (requestUrl.pathname === "/api/structural") return sendJson(res, 200, structural.getState());
     if (requestUrl.pathname === "/api/equities") return sendJson(res, 200, equityStructural.getState());
+    if (requestUrl.pathname === "/api/politician-disclosures") return sendJson(res, 200, houseDisclosures.getState());
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
     if (requestUrl.pathname === "/api/oil-monitor") return sendJson(res, 200, oilMonitor.getState());
 
@@ -503,6 +507,7 @@ server.listen(PORT, "0.0.0.0", () => {
   market.start();
   equityStructural.start();
   structural.start();
+  houseDisclosures.start();
   catalysts.start();
   eia.start();
   ecb.start();
@@ -513,6 +518,7 @@ let shutdownStarted = false;
 function shutdown(signal) {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  houseDisclosures.stop();
   console.log(`777 graceful shutdown: ${signal}`);
   try { oilMonitor.stop(); } catch (error) { console.error("777 oil monitor shutdown error:", error.message); }
   server.close(() => process.exit(0));
