@@ -13,6 +13,7 @@
 - Policy/social catalyst engine: `catalyst-v4.js`
 - Structural supply/demand discovery: `structural-intelligence-v1.js` -> `/data/structural-intelligence.json`
 - Focused equity confirmation engine: `equity-structural-v1.js`
+- Free House PTR filing discovery: `house-disclosures-v1.js` -> `/data/house-disclosures-state.json`; dashboard + `/api/politician-disclosures`, research-only. Scope, budget and source checks: [ops/POLITICIAN-DISCLOSURES.md](ops/POLITICIAN-DISCLOSURES.md).
 - Official EIA engine: `eia-v4.js`
 - Persistent signal journal: `signal-journal-v4.js` -> `/data/signal-journal.json`
 - Free oil-proxy provider: `alpaca-oil-proxy-v1.js`
