@@ -195,7 +195,24 @@ export function assessInformationHealth(status, oil, options = {}) {
       operationalFailures.push(`information-delivery-state-invalid:${name}`);
       continue;
     }
-    if (channel.error === "delivery-expired-requires-review" && channel.failed > 0) {
+    if (Object.hasOwn(channel, "reviewSchema")) {
+      const valid = channel.reviewSchema === 1 && channel.reviewScope === "MANUAL_SOURCE_DATE_NOTICE_TYPE" &&
+        ["ok", "missing", "error"].includes(channel.reviewStoreStatus) &&
+        ["expiredFailed", "reviewedFailed", "unreviewedFailed", "otherFailed"].every(key => Number.isSafeInteger(channel[key]) && channel[key] >= 0) &&
+        channel.failed === channel.expiredFailed + channel.otherFailed && channel.expiredFailed === channel.reviewedFailed + channel.unreviewedFailed &&
+        (channel.reviewStoreStatus === "ok" || channel.reviewedFailed === 0) &&
+        [null, "telegram-delivery-error", "delivery-state-persistence-failed"].includes(channel.activeDeliveryError);
+      if (!valid) {
+        operationalFailures.push(`information-review-state-invalid:${name}`);
+        if (channel.failed > 0) reviewRequired.push(`information-delivery-review-unverified:${name}:${channel.failed}`);
+      } else {
+        if (channel.reviewStoreStatus === "error") operationalFailures.push(`information-review-store-error:${name}`);
+        if (channel.unreviewedFailed > 0) reviewRequired.push(`information-delivery-expired:${name}:${channel.unreviewedFailed}`);
+        if (channel.otherFailed > 0) operationalFailures.push(`information-delivery-failed:${name}:${channel.otherFailed}`);
+        if (channel.activeDeliveryError) operationalFailures.push(`information-delivery-error:${name}:${channel.activeDeliveryError}`);
+        if (channel.error && channel.error !== "delivery-expired-requires-review") operationalFailures.push(`information-delivery-error:${name}:${channel.error}`);
+      }
+    } else if (channel.error === "delivery-expired-requires-review" && channel.failed > 0) {
       reviewRequired.push(`information-delivery-expired:${name}:${channel.failed}`);
     } else {
       if (channel.error) operationalFailures.push(`information-delivery-error:${name}:${channel.error}`);

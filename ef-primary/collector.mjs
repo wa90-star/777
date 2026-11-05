@@ -69,9 +69,31 @@ export function makeHttpReader({fetchImpl=fetch,userAgent='EnergyFuelsResearchCo
  Object.defineProperty(read,'supportsHttpBudget',{value:true});return read;
 }
 
+const MOFCOM_SAFE_ERRORS=new Set([
+ 'MOFCOM list query absent','Unexpected MOFCOM query','MOFCOM unsuccessful response',
+ 'No parseable items: empty feed or source layout changed; not interpreted as no news',
+ 'Duplicate source identity; refusing ambiguous source snapshot',
+ 'Source text exceeds 1.5 MB processing limit; no silent truncation',
+ 'Per-run HTTP request limit reached','Per-run time limit reached','Source exceeds response size limit',
+ 'URL outside source allowlist','Cross-host redirect blocked','Redirect without location','Too many redirects'
+]);
+function mofcomErrorDetail(error,phase){
+ const message=String(error?.message||'');
+ if(['listing-query','listing-parse'].includes(phase)&&error instanceof SyntaxError)return 'Invalid JSON in official listing data';
+ const transport=/^HTTP (?:(?:connection|body) failed at english\.mofcom\.gov\.cn: [A-Z0-9_,]+|[1-5]\d{2} at english\.mofcom\.gov\.cn)$/.test(message);
+ const itemLimit=/^Source exceeds \d{1,4}-item safety limit; investigate rather than truncate silently$/.test(message);
+ return MOFCOM_SAFE_ERRORS.has(message)||transport||itemLimit?message:'Unclassified official source failure';
+}
+
 export async function loadSource(source,read) {
+ let phase='listing-shell';
+ try{
  const fetched=await read(source.url),receipts=[fetched.receipt];let text=fetched.body;
- if(source.kind==='mofcom'){const unit=await read(mofcomUnitUrl(text,source));text=unit.body;receipts.push(unit.receipt);}
+ if(source.kind==='mofcom'){
+  phase='listing-query';const unitUrl=mofcomUnitUrl(text,source);
+  phase='listing-unit';const unit=await read(unitUrl);text=unit.body;receipts.push(unit.receipt);
+ }
+ phase='listing-parse';
  const items=parseListing(text,source);
  if(!items.length)throw new Error('No parseable items: empty feed or source layout changed; not interpreted as no news');
  const maximumItems=source.kind==='sec'?2000:100;
@@ -88,6 +110,12 @@ export async function loadSource(source,read) {
   if(sourceTextBytes>1_500_000)throw new Error('Source text exceeds 1.5 MB processing limit; no silent truncation');
  }
  return {items,receipts};
+ }catch(error){
+  if(source.kind!=='mofcom')throw error;
+  // The reader has already completed its bounded retry. This annotation makes
+  // no new request and must not expose JSON.parse's excerpt of source content.
+  throw new Error(`MOFCOM ${phase}: ${mofcomErrorDetail(error,phase)}`,{cause:error});
+ }
 }
 
 export async function readStatus(directory){const store=await openStore(directory);try{return store.status();}finally{store.close();}}

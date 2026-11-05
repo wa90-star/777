@@ -77,6 +77,43 @@ test("legacy expired Telegram channels remain review-required, mixed quote failu
   assert.deepEqual(result.reviewRequired, ["information-delivery-expired:policy:4"]);
   assert.equal(result.operationalFailures.some(value => value.includes("Alpaca") || value.includes(":8")), false);
 });
+function reviewedChannel() {
+  return { pending: 0, sent: 0, failed: 4, suppressed: 0, lastReceiptAt: null, error: "delivery-expired-requires-review",
+    reviewSchema: 1, reviewScope: "MANUAL_SOURCE_DATE_NOTICE_TYPE", reviewStoreStatus: "ok",
+    expiredFailed: 4, reviewedFailed: 4, unreviewedFailed: 0, otherFailed: 0, activeDeliveryError: null };
+}
+test("bound manual reviews close only historical review work and cannot create delivery or goal evidence", () => {
+  const pair = fixtures(); pair.status.generalInformation.informationDeliveryStatus.policy = reviewedChannel();
+  const result = assess(pair);
+  assert.deepEqual(result.reviewRequired, []); assert.equal(result.operationalOk, true);
+  assert.equal(result.information.channels.policy.failed, 4); assert.equal(result.information.channels.policy.reviewedFailed, 4);
+  assert.equal(result.deliveryEvidence.informationReceiptObserved, false); assert.equal(result.goalComplete, false); assert.equal(result.ok, false);
+  assert.ok(result.capabilityDegraded.includes("market-data-not-configured"));
+});
+test("reopened or unmatched cases remain review-required independently of reviewed historical failures", () => {
+  const pair = fixtures(), channel = reviewedChannel(); channel.reviewedFailed = 3; channel.unreviewedFailed = 1;
+  pair.status.generalInformation.informationDeliveryStatus.policy = channel;
+  assert.deepEqual(assess(pair).reviewRequired, ["information-delivery-expired:policy:1"]);
+});
+test("malformed review counts, untrusted missing store, and corrupted storage cannot produce a green review", () => {
+  for (const mutate of [c => { c.reviewSchema = 2; }, c => { c.reviewScope = "FULL_ECONOMIC_REVIEW"; }, c => { c.unreviewedFailed = -1; },
+    c => { c.expiredFailed = 3; }, c => { c.reviewedFailed = 5; }, c => { c.reviewStoreStatus = "missing"; }, c => { delete c.activeDeliveryError; }]) {
+    const pair = fixtures(), channel = reviewedChannel(); mutate(channel); pair.status.generalInformation.informationDeliveryStatus.policy = channel;
+    const result = assess(pair); assert.equal(result.operationalOk, false); assert.equal(result.incidentRequired, true);
+    assert.ok(result.reviewRequired.includes("information-delivery-review-unverified:policy:4"));
+  }
+  const pair = fixtures(), channel = reviewedChannel(); Object.assign(channel, { reviewStoreStatus: "error", reviewedFailed: 0, unreviewedFailed: 4 });
+  pair.status.generalInformation.informationDeliveryStatus.policy = channel;
+  assert.ok(assess(pair).operationalFailures.includes("information-review-store-error:policy"));
+  assert.deepEqual(assess(pair).reviewRequired, ["information-delivery-expired:policy:4"]);
+});
+test("reviewed old errors cannot hide a different failed delivery, a pending send failure, or state persistence failure", () => {
+  for (const mutate of [c => { c.failed++; c.otherFailed++; }, c => { c.pending = 1; c.oldestPendingAt = FRESH; c.activeDeliveryError = "telegram-delivery-error"; },
+    c => { c.activeDeliveryError = "delivery-state-persistence-failed"; }]) {
+    const pair = fixtures(), channel = reviewedChannel(); mutate(channel); pair.status.generalInformation.informationDeliveryStatus.policy = channel;
+    const result = assess(pair); assert.equal(result.operationalOk, false); assert.equal(result.incidentRequired, true);
+  }
+});
 test("new channel send failures, missing status and unknown pending age cannot pass", () => {
   for (const change of [
     p => { p.status.generalInformation.informationDeliveryStatus.eia.error = "Telegram 403"; },
