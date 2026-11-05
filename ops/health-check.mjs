@@ -130,6 +130,9 @@ export function assessHealth(
     if (kimi.lastError) failures.push(`kimi-error:${kimi.lastError}`);
   }
   if (status?.marketLastError) failures.push(`market-provider-error:${status.marketLastError}`);
+  for (const field of ["lastError", "lastEquityError"]) {
+    if (status?.energyFuelsHandoff?.[field]) failures.push(`energy-fuels-handoff-error:${field}:${status.energyFuelsHandoff[field]}`);
+  }
   if (status?.telegramDelivery?.lastError) failures.push(`telegram-delivery-error:${status.telegramDelivery.lastError}`);
   for (const [name, delivery] of Object.entries(status?.deliveryStatus || {})) {
     if (delivery?.error) failures.push(`delivery-error:${name}:${delivery.error}`);

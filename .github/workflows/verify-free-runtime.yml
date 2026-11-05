@@ -15,6 +15,9 @@ on:
 permissions:
   contents: read
 
+env:
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
+
 concurrency:
   group: verify-runtime-${{ github.ref }}
   cancel-in-progress: true
@@ -38,7 +41,10 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+          cache-image: false
       - uses: docker/setup-buildx-action@v3
+        with:
+          cache-binary: false
       - name: Verify Oracle Ampere and Raspberry Pi 64-bit image build
         uses: docker/build-push-action@v6
         with:
