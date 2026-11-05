@@ -733,7 +733,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       deliveryStatus: outbox.getStatus(),
       notificationMode: informationMode ? "source-information-only" : "legacy-catalyst",
       informationNoticesExecutionEligible: false,
-      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox) : null,
+      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox, { engine: "policy", directory: storageFile ? path.dirname(storageFile) : preferredDir }) : null,
       trumpFeedHealth: { ...state.trumpFeedHealth },
       pollingMinutes: {
         trumpTruth: POLL.trump / 60000,

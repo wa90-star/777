@@ -306,7 +306,7 @@ function createEcbEngine({ onFreshRelevant, sendMessage, telegramConfigured = ()
       deliveryStatus: outbox.getStatus(),
       notificationMode: informationMode ? "source-information-only" : "event-recheck-only",
       informationNoticesExecutionEligible: false,
-      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox) : null,
+      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox, { engine: "ecb", directory: storageFile ? path.dirname(storageFile) : preferredDir }) : null,
       rssUrl: ECB_RSS_URL,
       mode: "event-only; market confirmation required; no blind directional bias"
     })

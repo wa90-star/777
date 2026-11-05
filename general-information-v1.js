@@ -1,4 +1,5 @@
 "use strict";
+const { projectReviews } = require("./manual-source-review-v1");
 
 function administrativeCatalyst(item) {
   const text = `${item.title || ""} ${item.text || ""}`;
@@ -29,18 +30,29 @@ async function sendInformationNotice(item, sendMessage, heading) {
   return receipt;
 }
 
-function informationDeliveryStatus(outbox) {
+function informationDeliveryStatus(outbox, reviewOptions) {
+  const entries = outbox.snapshot();
   const status = { pending: 0, sent: 0, failed: 0, suppressed: 0, lastReceiptAt: null, error: null, historyScope: "telegram-channel-including-legacy" };
-  for (const entry of outbox.snapshot()) {
+  let oldestPending = null, activeDeliveryError = null;
+  for (const entry of entries) {
     const delivery = entry.deliveries.telegram;
     if (!delivery) continue;
     if (Object.hasOwn(status, delivery.status)) status[delivery.status]++;
     if (delivery.error) status.error ||= delivery.error;
+    if (delivery.status === "pending") {
+      if (Number.isFinite(entry.createdAt) && (oldestPending === null || entry.createdAt < oldestPending)) oldestPending = entry.createdAt;
+      if (delivery.error) activeDeliveryError = "telegram-delivery-error";
+    }
     if (delivery.status === "sent" && delivery.providerReceipt?.messageId && delivery.acknowledgedAt > (status.lastReceiptAt || "")) status.lastReceiptAt = delivery.acknowledgedAt;
   }
   // A shared storage failure applies to this channel too; quote failures do not.
   const sharedError = outbox.getStatus().error;
   if (sharedError === "delivery-state-persistence-failed") status.error = sharedError;
+  if (reviewOptions) {
+    if (sharedError === "delivery-state-persistence-failed") activeDeliveryError = sharedError;
+    Object.assign(status, projectReviews({ ...reviewOptions, entries }), { activeDeliveryError,
+      oldestPendingAt: oldestPending === null ? null : new Date(oldestPending).toISOString() });
+  }
   return status;
 }
 
