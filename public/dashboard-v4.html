@@ -19,7 +19,7 @@
 <main>
 <header class="hero"><h1 class="logo">777</h1><div class="subtitle">Aktienradar & Energy Fuels</div><div class="focus">Aktien und Rohstoffe · Originalquellen für Energy Fuels · Keine automatische Handelsausführung</div></header>
 <div class="statusbar"><div class="statusleft"><span id="dot" class="dot"></span><span id="system">System wird geprüft</span></div><div id="clock" class="small">—</div></div>
-<section class="section"><div class="head"><h2>Allgemeiner Radar · Informationsbetrieb</h2><span id="infoBadge" class="badge">WIRD GEPRÜFT</span></div><div id="infoSummary" class="notice">Quellen- und Meldeverbindung werden geprüft.</div><div class="notice">Ausgewählte Politik-, Energie- und Zentralbankmeldungen können unabhängig von Kursdaten gemeldet werden. Eine Quellenmeldung bestätigt keine Kursbewegung. Nicht alle Aktien und Branchen sind abgedeckt.</div></section>
+<section class="section"><div class="head"><h2>Allgemeiner Radar · Informationsbetrieb</h2><span id="infoBadge" class="badge">WIRD GEPRÜFT</span></div><div id="infoSummary" class="notice">Quellen- und Meldeverbindung werden geprüft.</div><div id="infoDelivery" class="notice">Zustellnachweise werden geladen.</div><div class="notice">Ausgewählte Politik-, Energie- und Zentralbankmeldungen können unabhängig von Kursdaten gemeldet werden. Eine Quellenmeldung bestätigt keine Kursbewegung. Nicht alle Aktien und Branchen sind abgedeckt.</div></section>
 <section class="section"><div class="head"><h2>Energy Fuels · Quellen und Zustellung</h2><span id="efBadge" class="badge">WIRD GEPRÜFT</span></div><div id="efSummary" class="notice">Quellenstatus wird geladen.</div><div id="efSources" class="sourcegrid"></div><div class="notice">Originalmeldungen und Branchenhinweise werden gesammelt. Wirtschaftliche Bedeutung und Auswirkungen auf die Anlagethese brauchen eine gesonderte Prüfung. Die Quellenabdeckung ist begrenzt; nach einem Versandabbruch sind Doppelmeldungen mit gleicher Hinweis-ID möglich.</div></section>
 <div class="metrics">
   <div class="metric"><div class="k">Kern-Radar</div><div id="coreRate" class="v">—</div></div>
@@ -46,7 +46,41 @@ function safeSourceLink(title,value){let url;try{url=new URL(value)}catch{return
 function sourceIsFresh(x,minutes){const age=Date.now()-Date.parse(x.lastSuccessAt);return x.status==='OK'&&!x.warnings?.length&&Number.isFinite(age)&&age>=-300000&&age<minutes*120000}
 async function loadEf(){try{const d=await get('/api/ef-primary/status'),s=d.status;const rows=Object.entries(s?.sources||{});const fresh=rows.filter(([,x])=>sourceIsFresh(x,d.intervalMinutes)).length;$('efBadge').textContent=!d.enabled?'NICHT AKTIV':!s?'STARTET':`${fresh}/${rows.length} QUELLEN AKTUELL`;$('efBadge').className=`badge ${d.enabled&&rows.length===10&&fresh===10&&!d.lastDeliveryError?'ok':'pending'}`;$('efSummary').textContent=!d.enabled?'Dieser Standort hat den Energy-Fuels-Sammler nicht aktiviert.':`Letzter Durchlauf: ${time(d.lastCollectionAt)} · ${s?.totalEvents||0} gespeicherte Ereignisse · ${s?.pendingActionable||0} Hinweise warten auf Versand · ${s?.deliveredNotices||0} vom Anbieter bestätigt. ${!d.configured?'Meldeweg noch nicht aktiv. ':''}${d.lastDeliveryError?'Zustellproblem: '+d.lastDeliveryError:''}${d.lastCollectionError?' Quellenprüfung eingeschränkt.':''}`;$('efSources').innerHTML=rows.map(([id,x])=>`<div class="source"><div class="sname">${esc(id)}</div><div class="sstate ${sourceIsFresh(x,d.intervalMinutes)?'ok':'bad'}">${sourceIsFresh(x,d.intervalMinutes)?'Aktuell':'Prüfen'}</div><div class="small">${time(x.lastSuccessAt)}</div></div>`).join('')}catch(e){$('efBadge').textContent='NICHT ERREICHBAR';$('efSummary').textContent='Quellenstatus kann gerade nicht geprüft werden.'}}
 function renderRows(id,list){if(!list?.length){$(id).innerHTML='<div class="empty">Noch keine Messung verfügbar.</div>';return}$(id).innerHTML=list.map(s=>{const p=Number(s.percentChange||0),v=Number(s.velocityPct||0),c=s.correlation;return `<div class="row"><div><div class="symbol">${esc(s.symbol)}</div><div class="name">${esc(s.name)}</div><div class="dir ${dirClass(s.direction)}">${esc(s.direction)}</div></div><div><div class="price">${esc(s.price)}</div><div class="move ${p>=0?'long':'short'}">${p>0?'+':''}${p.toFixed(2)}%</div><div class="velocity">kurz: ${v>0?'+':''}${v.toFixed(2)}%${s.velocityMinutes?` / ${esc(s.velocityMinutes)}m`:''}${c?` · Bestätigungen ${c.count}/${c.required}`:''}</div></div><div class="score"><strong>${esc(s.score)}</strong><span>${esc(s.priority)}</span></div></div>`}).join("")}
-async function loadStatus(){try{const d=await get('/api/status'),info=d.generalInformation||{};$('dot').className='dot online';$('system').textContent=d.marketDataConfigured?'System online · Kursverbindung konfiguriert':'System online · Kursverbindung fehlt';$('coreRate').textContent=`${d.coreIntervalMinutes} min`;$('corrMetric').textContent=`Regel: ${d.correlationRequired} Quellen`;$('qualityBadge').textContent=`REGEL: ${d.correlationRequired} BESTÄTIGUNGEN`;$('telegram').textContent=d.deliveryMode==='probe-only'?'Verbindung wird geprüft':!d.telegramConfigured?'nicht konfiguriert':d.telegramDelivery?.lastError?'Zustellfehler':d.telegramDelivery?.lastSuccessAt?`Zustellung ${time(d.telegramDelivery.lastSuccessAt)}`:'konfiguriert · ungetestet';$('lastAlert').textContent=time(d.lastAlertAt);$('infoBadge').textContent=!info.enabled?'NICHT AKTIV':info.deliveryEnabled?'QUELLENHINWEISE AKTIV':'VERSAND NOCH NICHT AKTIV';$('infoBadge').className=`badge ${info.deliveryEnabled?'ok':'pending'}`;$('infoSummary').textContent=!info.enabled?'Der allgemeine Informationsmodus ist hier noch nicht aktiviert.':`${info.deliveryEnabled?'Neue relevante Quellenhinweise können über Telegram zugestellt werden.':'Quellen werden gesammelt; der Versand ist noch nicht freigeschaltet.'} ${d.marketDataConfigured?'Kurszugang ist eingerichtet; jede Marktbestätigung benötigt weiterhin frische passende Daten.':'Aktuelle Aktien-/ETF-Kurse, Spread- und Volumenprüfungen fehlen. Daraus werden keine bestätigten Handelssignale abgeleitet.'}`;}catch(e){$('dot').className='dot error';$('system').textContent='System nicht erreichbar';$('infoBadge').textContent='NICHT ERREICHBAR';$('infoSummary').textContent='Der aktuelle Betriebszustand kann nicht geprüft werden.'}}
+function renderInformationStatus(info,telegramDelivery){
+  $('infoBadge').textContent=!info.enabled?'NICHT AKTIV':info.deliveryEnabled?'VERSAND FREIGESCHALTET':'VERSAND NICHT FREIGESCHALTET';
+  $('infoBadge').className='badge pending';
+  if(!info.enabled){$('infoDelivery').textContent='Informationsmodus nicht aktiviert; keine aktuellen Zustellnachweise dieses Modus.';return}
+  const rows=[['policy','Politik'],['eia','EIA'],['ecb','ECB']];
+  const count=value=>Number.isInteger(value)&&value>=0?value:0;
+  const receiptTime=value=>{const date=new Date(value);return value&&!Number.isNaN(date.getTime())?date.toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'kein gespeicherter Beleg'};
+  const sharedError=telegramDelivery?.lastError?`<div class="corrline bad">Gemeinsamer Telegram-Meldeweg: ${esc(telegramDelivery.lastError)}</div>`:'';
+  $('infoDelivery').innerHTML=sharedError+rows.map(([key,label])=>{
+    const status=info.informationDeliveryStatus?.[key];
+    if(!status)return `<div class="corrline pending">${label}: Zustellhistorie nicht verfügbar.</div>`;
+    const error=status.error?` · Fehler: ${esc(status.error)}`:'';
+    const legacy=status.historyScope==='telegram-channel-including-legacy'?' Enthält auch ältere Telegram-Einträge; keine reine Statistik des neuen Informationsmodus.':'';
+    return `<div class="corrline ${status.error||count(status.failed)?'bad':'pending'}"><strong>${label}</strong> · ${count(status.pending)} ausstehend · ${count(status.failed)} fehlgeschlagen · ${count(status.sent)} als gesendet gespeichert · ${count(status.suppressed)} unterdrückt${error}<br>Letzter gespeicherter Anbieterbeleg: ${esc(receiptTime(status.lastReceiptAt))}.${legacy}</div>`;
+  }).join('');
+}
+async function loadStatus(){
+  try{
+    const d=await get('/api/status'),info=d.generalInformation||{};
+    $('dot').className='dot online';
+    $('system').textContent=d.marketDataConfigured?'System online · Kursverbindung konfiguriert':'System online · Kursverbindung fehlt';
+    $('coreRate').textContent=`${d.coreIntervalMinutes} min`;
+    $('corrMetric').textContent=`Regel: ${d.correlationRequired} Quellen`;
+    $('qualityBadge').textContent=`REGEL: ${d.correlationRequired} BESTÄTIGUNGEN`;
+    $('telegram').textContent=d.deliveryMode==='probe-only'?'Verbindung wird geprüft':!d.telegramConfigured?'nicht konfiguriert':d.telegramDelivery?.lastError?'Zustellfehler':d.telegramDelivery?.lastSuccessAt?`Zustellung ${time(d.telegramDelivery.lastSuccessAt)}`:'konfiguriert · ungetestet';
+    $('lastAlert').textContent=time(d.lastAlertAt);
+    renderInformationStatus(info,d.telegramDelivery);
+    $('infoSummary').textContent=!info.enabled?'Der allgemeine Informationsmodus ist hier noch nicht aktiviert.':`${info.deliveryEnabled?'Der Versand ist freigeschaltet; Zustellbelege und Fehler stehen separat darunter.':'Quellen werden gesammelt; der Versand ist noch nicht freigeschaltet.'} ${d.marketDataConfigured?'Kurszugang ist eingerichtet; jede Marktbestätigung benötigt weiterhin frische passende Daten.':'Aktuelle Aktien-/ETF-Kurse, Spread- und Volumenprüfungen fehlen. Daraus werden keine bestätigten Handelssignale abgeleitet.'}`;
+  }catch(e){
+    $('dot').className='dot error';$('system').textContent='System nicht erreichbar';
+    $('infoBadge').textContent='NICHT ERREICHBAR';$('infoBadge').className='badge bad';
+    $('infoSummary').textContent='Der aktuelle Betriebszustand kann nicht geprüft werden.';
+    $('infoDelivery').textContent='Zustellnachweise können gerade nicht aktualisiert werden.';
+  }
+}
 async function loadOil(){
   try{
     const d=await get('/api/oil-monitor'),p=d.provider||{},products=d.products||{},c=d.calibration||{};

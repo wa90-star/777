@@ -386,6 +386,12 @@ function statusPayload() {
       notificationMode: GENERAL_INFO_MODE ? "PRIMARY_SOURCE_INFORMATION" : "LEGACY",
       informationNoticesExecutionEligible: false,
       deliveryEnabled: GENERAL_INFO_MODE && telegramConfigured(),
+      // Configuration is not a receipt or proof that the delivery queue is healthy.
+      informationDeliveryStatus: {
+        policy: policyState.informationDeliveryStatus || null,
+        eia: eiaState.informationDeliveryStatus || null,
+        ecb: ecbState.informationDeliveryStatus || null
+      },
       marketDataConfigured: Boolean(marketState.alpacaConfigured),
       sources: ["existing-policy-feeds", "official-eia", "official-ecb"],
       scope: "Selected policy, energy and monetary-policy events; not exhaustive stock-market coverage",
