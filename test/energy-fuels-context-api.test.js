@@ -16,7 +16,7 @@ test("real local API serves persisted EF context read-only with honest ownership
       detectedAt: now, publishedAt: null, sourceClass: "secondary-discovery", baseline: true }]
   }));
   const env = { ...process.env, PORT: "0", RADAR_PORT: "0", RADAR_BIND_ADDRESS: "127.0.0.1",
-    RADAR_DATA_DIR: dir, OIL_DATA_MODE: "free-proxy", KIMI_RESEARCH_MODE: "off" };
+    RADAR_DATA_DIR: dir, OIL_DATA_MODE: "free-proxy", KIMI_RESEARCH_MODE: "off", RADAR_GENERAL_INFO_MODE: "true" };
   for (const key of ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     "TWELVE", "MASSIVE_API_KEY", "RADAR_RECOVERY_BACKUP_ID"]) delete env[key];
   const child = spawn(process.execPath, [path.join(__dirname, "..", "server-v4.js")], {
@@ -46,6 +46,11 @@ test("real local API serves persisted EF context read-only with honest ownership
   assert.equal(status.version, require("../package.json").version);
   assert.equal(status.energyFuelsRouting.owner, "energy-fuels-fokus");
   assert.equal(status.telegramConfigured, false);
+  assert.equal(status.generalInformation.enabled, true);
+  assert.equal(status.generalInformation.deliveryEnabled, false);
+  assert.equal(status.generalInformation.marketDataConfigured, false);
+  assert.equal(status.generalInformation.informationNoticesExecutionEligible, false);
+  assert.equal(status.generalInformation.notificationMode, "PRIMARY_SOURCE_INFORMATION");
   const response = await fetch(base + "/api/energy-fuels-context");
   assert.equal(response.status, 200);
   const context = await response.json();

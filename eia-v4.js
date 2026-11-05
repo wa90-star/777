@@ -1,6 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 const createDeliveryOutbox = require("./delivery-outbox-v1");
+const { sendInformationNotice, informationDeliveryStatus, persistInformationHandoff, restoreInformationHandoffs } = require("./general-information-v1");
+const { isEnergyFuelsSpecific } = require("./signal-ownership-v1");
+const writeDurableState = require("./durable-state-v1");
 
 const POLL_MS = 5 * 60 * 1000;
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -123,7 +126,7 @@ function classify(raw) {
   };
 }
 
-function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant }) {
+function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, energyFuelsHandoff, informationMode = process.env.RADAR_GENERAL_INFO_MODE === "true" }) {
   const seen = new Map();
   const preferredDir = process.env.RADAR_DATA_DIR || "/data";
   let storageFile = null;
@@ -141,12 +144,16 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
   const outbox = createDeliveryOutbox({
     persist,
     handlers: {
-      ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {}),
       telegram: {
         enabled: telegramConfigured,
-        deliver: ([item]) => sendMessage(formatAlert(item)),
+        deliver: ([item]) => {
+          if (!informationMode) return sendMessage(formatAlert(item));
+          return sendInformationNotice({ ...item, ownerDeliveryPending: isEnergyFuelsSpecific(item) }, sendMessage, "777 EIA · INFORMATIONSHINWEIS");
+        },
         onDelivered: () => onAlert?.(new Date().toISOString())
-      }
+      },
+      ...(informationMode ? { energyFuelsHandoff: { deliver: ([item]) => persistInformationHandoff(item, energyFuelsHandoff) } } : {}),
+      ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {})
     }
   });
 
@@ -167,18 +174,16 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
   }
 
   function persist() {
-    if (!storageFile) return false;
+    if (!storageFile || (informationMode && !persistenceMode.startsWith("persistent:"))) return false;
     try {
-      const tmp = `${storageFile}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({
+      writeDurableState(storageFile, {
         version: 2,
         savedAt: new Date().toISOString(),
         seen: [...seen.entries()],
         primed,
         items: state.items.slice(0, 30),
         deliveryOutbox: outbox.snapshot()
-      }, null, 2));
-      fs.renameSync(tmp, storageFile);
+      });
       return true;
     } catch (error) {
       console.error("777 EIA persist error:", error.message);
@@ -200,7 +205,7 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
       state.items = (Array.isArray(parsed.items) ? parsed.items : [])
         .filter((x) => x?.detectedAt && Date.now() - safeTime(x.detectedAt) <= SEEN_MAX_AGE_MS)
         .slice(0, 30);
-      outbox.restore(parsed.deliveryOutbox);
+      outbox.restore(restoreInformationHandoffs(parsed.deliveryOutbox, informationMode, isEnergyFuelsSpecific));
       console.log(`777 EIA state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
       console.error("777 EIA state load error:", error.message);
@@ -282,7 +287,7 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     for (const [key, ts] of seen.entries()) if (ts < cutoff) seen.delete(key);
     if (fresh.length) state.items = [...fresh, ...state.items].slice(0, 30);
     const alerts = fresh.filter((item) => item.priority === "HIGH");
-    outbox.enqueue(alerts, ["marketRecheck", "telegram"]);
+    for (const item of alerts) outbox.enqueue([item], ["marketRecheck", "telegram", ...(informationMode && isEnergyFuelsSpecific(item) ? ["energyFuelsHandoff"] : [])]);
     persist();
     await outbox.drain();
   }
@@ -324,6 +329,9 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
       focus: "official US energy releases",
       persistence: persistenceMode,
       deliveryStatus: outbox.getStatus(),
+      notificationMode: informationMode ? "source-information-only" : "legacy-catalyst",
+      informationNoticesExecutionEligible: false,
+      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox) : null,
       pollingMinutes: POLL_MS / 60000
     })
   };
