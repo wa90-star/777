@@ -9,6 +9,8 @@ function createEnergyFuelsHandoff({ dataDir = process.env.RADAR_DATA_DIR || "/da
   const filename = path.join(directory, "energy-fuels-handoff.jsonl");
   let entries = new Map();
   let lastError = null;
+  let validatedSignature = null;
+  const signature = (stat) => stat ? [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":") : "missing";
 
   function read() {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -16,9 +18,13 @@ function createEnergyFuelsHandoff({ dataDir = process.env.RADAR_DATA_DIR || "/da
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error("Invalid handoff directory");
     const current = new Map();
     let stat;
-    try { stat = fs.lstatSync(filename); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    try { stat = fs.lstatSync(filename, { bigint: true }); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    const currentSignature = signature(stat);
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) throw new Error("Invalid handoff file");
+    // Status polls must not reparse unchanged, append-only history. Only a fully
+    // validated file is cached; failed or interrupted reads are never cached.
+    if (validatedSignature === currentSignature) return;
     if (stat) {
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Invalid handoff file");
       const content = fs.readFileSync(filename, "utf8");
       if (content && !content.endsWith("\n")) throw new Error("Incomplete handoff record");
       for (const line of content.split("\n").filter(Boolean)) {
@@ -36,8 +42,13 @@ function createEnergyFuelsHandoff({ dataDir = process.env.RADAR_DATA_DIR || "/da
         }
         current.set(entry.eventId, entry);
       }
+      const after = fs.lstatSync(filename, { bigint: true });
+      if (!after.isFile() || after.isSymbolicLink() || signature(after) !== currentSignature) {
+        throw new Error("Handoff changed during validation");
+      }
     }
     entries = current;
+    validatedSignature = currentSignature;
   }
 
   function persistLine(line) {
@@ -97,19 +108,31 @@ function createEnergyFuelsHandoff({ dataDir = process.env.RADAR_DATA_DIR || "/da
     return record("equity", signal.structural.id + ":" + signal.direction, signal);
   }
 
-  function getState() {
-    try { read(); } catch (error) {
+  function refresh() {
+    try {
+      read();
+      if (lastError?.startsWith("Energy Fuels handoff could not be read:")) lastError = null;
+    } catch (error) {
       lastError = "Energy Fuels handoff could not be read: " + (error.code || "invalid-state");
     }
+  }
+
+  function getSummary() {
+    refresh();
     return {
       owner: "energy-fuels-fokus", persistence: "persistent:" + directory,
-      pendingCount: entries.size, pending: [...entries.values()],
+      pendingCount: entries.size,
       lastError, deliveryConfirmed: false, ownerReadConfirmed: false,
       automaticDeletion: false
     };
   }
 
-  return { recordPolicy, recordEquity, getState };
+  function getState() {
+    // Callers must not mutate the validated cache through a returned evidence object.
+    return { ...getSummary(), pending: [...entries.values()].map(entry => JSON.parse(JSON.stringify(entry))) };
+  }
+
+  return { recordPolicy, recordEquity, getState, getSummary };
 }
 
 module.exports = createEnergyFuelsHandoff;

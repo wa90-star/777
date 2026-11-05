@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - '*.js'
+      - 'ef-primary/**'
+      - 'package.json'
       - 'test/**'
       - 'public/**'
       - 'ops/**'
@@ -37,6 +39,10 @@ jobs:
         run: docker build -t radar-acceptance:${{ github.sha }} .
       - name: Prove restart persistence, read-only API and failure detection
         run: node ops/container-smoke.mjs radar-acceptance:${{ github.sha }}
+      - name: Measure bounded native Linux runtime with public sources
+        # Software acceptance only: fresh disposable data, no credentials,
+        # Telegram sends, scheduled operation, artifacts or cache uploads.
+        run: node ops/container-memory.mjs radar-acceptance:${{ github.sha }}
       - name: Configure ARM build emulation
         uses: docker/setup-qemu-action@v3
         with:

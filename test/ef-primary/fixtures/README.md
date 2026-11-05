@@ -1,0 +1,1 @@
+All fixtures in this folder are small, invented test documents. They reproduce observed RSS/HTML/JSON structures only. No downloaded third-party pages, actual company releases, holdings, credentials or personal data are included. The public source hostnames and SEC CIK are parser-routing inputs, not evidence of a real event.

@@ -101,3 +101,118 @@ test("real policy outbox retries handoff storage failure after restart instead o
   assert.equal(retained.pending[0].deliveryConfirmed, false);
   assert.equal(retained.pending[0].ownerReadConfirmed, false);
 });
+
+test("summary validates once at startup, then unchanged status polls reuse the validated history", (t) => {
+  const { dir, filename } = fixture(t);
+  createHandoff({ dataDir: dir }).recordPolicy({ id: "cached:first", title: "Retained evidence" });
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  t.mock.method(fs, "readFileSync", (...args) => {
+    if (args[0] === filename) reads++;
+    return originalRead(...args);
+  });
+  const store = createHandoff({ dataDir: dir });
+  const summary = store.getSummary();
+  assert.equal(summary.pendingCount, 1);
+  assert.equal(summary.lastError, null);
+  assert.equal(Object.hasOwn(summary, "pending"), false);
+  assert.equal(summary.ownerReadConfirmed, false);
+  assert.equal(summary.deliveryConfirmed, false);
+  for (let index = 0; index < 100; index++) assert.equal(store.getSummary().pendingCount, 1);
+  assert.equal(store.getState().pending[0].evidence.title, "Retained evidence");
+  store.getState().pending[0].evidence.title = "mutated response";
+  assert.equal(store.getState().pending[0].evidence.title, "Retained evidence");
+  assert.equal(reads, 1, "summary and compatible full-state reads do not reread unchanged bytes");
+});
+
+test("each identity, size and nanosecond timestamp component invalidates the read cache", (t) => {
+  const { dir, filename } = fixture(t);
+  createHandoff({ dataDir: dir }).recordPolicy({ id: "cached:signature" });
+  const originalRead = fs.readFileSync, originalStat = fs.lstatSync;
+  let reads = 0, changed = null;
+  t.mock.method(fs, "readFileSync", (...args) => {
+    if (args[0] === filename) reads++;
+    return originalRead(...args);
+  });
+  t.mock.method(fs, "lstatSync", (...args) => {
+    const stat = originalStat(...args);
+    if (args[0] === filename && args[1]?.bigint && changed) {
+      Object.defineProperty(stat, changed, { value: stat[changed] + 1n });
+    }
+    return stat;
+  });
+  const store = createHandoff({ dataDir: dir });
+  assert.equal(store.getSummary().lastError, null);
+  for (const field of ["dev", "ino", "size", "mtimeNs", "ctimeNs"]) {
+    const prior = reads;
+    changed = field;
+    assert.equal(store.getSummary().lastError, null);
+    assert.equal(reads, prior + 1, field + " must force complete validation");
+    assert.equal(store.getSummary().lastError, null);
+    assert.equal(reads, prior + 1, field + " remains cacheable after successful validation");
+  }
+});
+
+test("external append is validated and immediately included without modifying earlier evidence", (t) => {
+  const { dir, filename } = fixture(t);
+  const writer = createHandoff({ dataDir: dir });
+  writer.recordPolicy({ id: "append:first", title: "First retained entry" });
+  const reader = createHandoff({ dataDir: dir });
+  assert.equal(reader.getSummary().pendingCount, 1);
+  const original = fs.readFileSync(filename, "utf8");
+  writer.recordPolicy({ id: "append:second", title: "Second retained entry" });
+  assert.equal(reader.getSummary().pendingCount, 2);
+  assert.equal(reader.getSummary().lastError, null);
+  assert.equal(fs.readFileSync(filename, "utf8").startsWith(original), true);
+  assert.equal(reader.getState().pending[0].evidence.title, "First retained entry");
+});
+
+test("post-cache corruption stays visible, is not cached as success, and recovers only after valid repair", (t) => {
+  const { dir, filename } = fixture(t);
+  const store = createHandoff({ dataDir: dir });
+  store.recordPolicy({ id: "corrupt:first" });
+  const valid = fs.readFileSync(filename, "utf8");
+  assert.equal(store.getSummary().lastError, null);
+  fs.appendFileSync(filename, '{"partial":');
+  const corrupt = fs.readFileSync(filename, "utf8");
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  t.mock.method(fs, "readFileSync", (...args) => {
+    if (args[0] === filename) reads++;
+    return originalRead(...args);
+  });
+  assert.match(store.getSummary().lastError, /could not be read/);
+  assert.match(store.getSummary().lastError, /could not be read/);
+  assert.equal(reads, 2, "invalid bytes cannot create a successful cache entry");
+  assert.throws(() => store.recordPolicy({ id: "corrupt:new" }), /could not be persisted/);
+  assert.equal(originalRead(filename, "utf8"), corrupt);
+  fs.writeFileSync(filename, valid);
+  assert.match(store.getSummary().lastError, /could not be persisted/, "a failed write remains visible until its successful retry");
+  assert.equal(store.getSummary().pendingCount, 1);
+  assert.equal(originalRead(filename, "utf8"), valid);
+  assert.equal(store.recordPolicy({ id: "corrupt:new" }).persisted, true);
+  assert.equal(store.getSummary().lastError, null);
+  assert.equal(store.getSummary().pendingCount, 2);
+});
+
+test("a change during file validation is exposed and cannot install a stale cache", (t) => {
+  const { dir, filename } = fixture(t);
+  createHandoff({ dataDir: dir }).recordPolicy({ id: "race:first" });
+  const valid = fs.readFileSync(filename, "utf8");
+  const originalRead = fs.readFileSync;
+  let modify = true;
+  t.mock.method(fs, "readFileSync", (...args) => {
+    const result = originalRead(...args);
+    if (args[0] === filename && modify) {
+      modify = false;
+      fs.appendFileSync(filename, '{"partial":');
+    }
+    return result;
+  });
+  const store = createHandoff({ dataDir: dir });
+  assert.match(store.getSummary().lastError, /could not be read/);
+  assert.equal(store.getSummary().pendingCount, 0);
+  fs.writeFileSync(filename, valid);
+  assert.equal(store.getSummary().lastError, null);
+  assert.equal(store.getSummary().pendingCount, 1);
+});

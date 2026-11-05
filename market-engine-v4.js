@@ -120,7 +120,7 @@ function createMarketEngine({
 }) {
   const alpacaKey = process.env.APCA_API_KEY_ID;
   const alpacaSecret = process.env.APCA_API_SECRET_KEY;
-  const twelveKey = process.env.TWELVE;
+  const twelveKey = process.env.RADAR_FREE_ONLY === "true" ? null : process.env.TWELVE;
   const previous = new Map();
   const alertState = new Map();
   const optionCheckedAt = new Map();

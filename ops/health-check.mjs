@@ -134,6 +134,19 @@ export function assessHealth(
     if (status?.energyFuelsHandoff?.[field]) failures.push(`energy-fuels-handoff-error:${field}:${status.energyFuelsHandoff[field]}`);
   }
   if (status?.telegramDelivery?.lastError) failures.push(`telegram-delivery-error:${status.telegramDelivery.lastError}`);
+  const ef = status?.energyFuelsPrimary;
+  if (ef?.enabled === true) {
+    if (ef.deliveryPaused) failures.push("ef-primary-delivery-paused");
+    if (ef.lastDeliveryError) failures.push("ef-primary-delivery-error");
+    if (ef.lastCollectionError) failures.push("ef-primary-collection-degraded");
+    const maxAge = Math.min(45, Math.max(10, Number(ef.intervalMinutes || 10) * 2)) * 60000;
+    if (!isFreshTimestamp(ef.lastCollectionAt, nowMs, maxAge)) failures.push("ef-primary-scan-stale");
+    const efSources = Object.entries(ef.status?.sources || {});
+    if (efSources.length !== 10) failures.push("ef-primary-source-coverage-incomplete");
+    for (const [name, source] of efSources) {
+      if (source.status !== "OK" || source.warnings?.length || !isFreshTimestamp(source.lastSuccessAt, nowMs, maxAge)) failures.push(`ef-primary-source-degraded:${name}`);
+    }
+  }
   for (const [name, delivery] of Object.entries(status?.deliveryStatus || {})) {
     if (delivery?.error) failures.push(`delivery-error:${name}:${delivery.error}`);
     if (Number(delivery?.failed || 0) > 0) failures.push(`delivery-failed:${name}:${delivery.failed}`);

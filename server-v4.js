@@ -16,13 +16,22 @@ const { createTelegramTransport, redactError } = require("./telegram-transport-v
 const runDeferredMarketRecheck = require("./market-recheck-v1");
 const { energyFuelsPolicy, energyFuelsContext, ENERGY_FUELS_CONTEXT_PATH } = require("./signal-ownership-v1");
 const createEnergyFuelsHandoff = require("./energy-fuels-handoff-v1");
+const { createEfPrimaryRuntime } = require("./ef-primary-runtime-v1");
+const { createDeliveryProbe } = require("./delivery-probe-v1");
+const { createPrivateBackupHandler } = require("./private-backup-v1");
 const VERSION = require("./package.json").version;
 
 const PORT = Number(process.env.PORT || process.env.RADAR_PORT || 3000);
 const BIND_ADDRESS = process.env.RADAR_BIND_ADDRESS || "0.0.0.0";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const telegramTransport = createTelegramTransport({ token: TELEGRAM_BOT_TOKEN, chatId: TELEGRAM_CHAT_ID });
+const telegramTransport = createTelegramTransport({ token: TELEGRAM_BOT_TOKEN, chatId: TELEGRAM_CHAT_ID, verifyPrivateTarget: true });
+const DELIVERY_MODE = process.env.RADAR_DELIVERY_MODE === "probe-only" ? "probe-only" : "live";
+const alertTransport = { ...telegramTransport, configured: () => DELIVERY_MODE === "live" && telegramTransport.configured(),
+  send: text => DELIVERY_MODE === "live" ? telegramTransport.send(text) : Promise.reject(new Error("Live alerts disabled during connection acceptance")) };
+const efPrimary = createEfPrimaryRuntime({ transport: alertTransport });
+const deliveryProbe = createDeliveryProbe({ transport: telegramTransport });
+const privateBackup = createPrivateBackupHandler({ dataDir: process.env.RADAR_DATA_DIR || "/data", id: process.env.RADAR_RECOVERY_BACKUP_ID, accessKey: process.env.RADAR_BACKUP_ACCESS_KEY });
 const ALLOWED_QUOTES = new Set(["GLD", "SLV", "USO", "UNG", "COPX", "DBA", "SPY", "QQQ", "TLT", "UUP"]);
 const MARKET_REPEAT_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 const MARKET_ESCALATION_MOVE_PCT = 2;
@@ -50,7 +59,7 @@ function sendJson(res, statusCode, data) {
 }
 
 function telegramConfigured() {
-  return telegramTransport.configured();
+  return alertTransport.configured();
 }
 
 function shouldSuppressAdministrativeCatalyst(text) {
@@ -65,7 +74,7 @@ async function sendTelegramMessage(text) {
     console.log("777 administrative catalyst alert suppressed");
     return { suppressed: true, reason: "administrative-catalyst-noise" };
   }
-  return telegramTransport.send(text);
+  return alertTransport.send(text);
 }
 
 function parseMarketAlert(text) {
@@ -314,7 +323,7 @@ function statusPayload() {
   const ecbState = ecb.getState();
   const structuralState = structural.getState();
   const equityState = equityStructural.getState();
-  const handoffState = energyFuelsHandoff.getState();
+  const handoffState = energyFuelsHandoff.getSummary();
   const journalState = journal.getState();
   const oilState = oilMonitor.getState();
   const oilScope = publicOilScope(oilState);
@@ -361,7 +370,11 @@ function statusPayload() {
       "public-api-read-only-to-protect-data-budget"
     ],
     telegramConfigured: telegramConfigured(),
+    deliveryMode: DELIVERY_MODE,
+    telegramCredentialsConfigured: telegramTransport.configured(),
     telegramDelivery: telegramTransport.getState(),
+    deliveryProbe: deliveryProbe.getState(),
+    energyFuelsPrimary: efPrimary.getState(),
     deliveryStatus: { policy: policyState.deliveryStatus, eia: eiaState.deliveryStatus },
     marketDataConfigured: marketState.alpacaConfigured,
     marketDataSource: marketState.source,
@@ -471,10 +484,13 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/eia") return sendJson(res, 200, eia.getState());
     if (requestUrl.pathname === "/api/ecb") return sendJson(res, 200, ecb.getState());
     if (requestUrl.pathname === "/api/structural") return sendJson(res, 200, structural.getState());
+    if (requestUrl.pathname === "/api/private-backup") return privateBackup(req, res);
+    if (requestUrl.pathname === "/api/ef-primary/status") return sendJson(res, 200, efPrimary.getState());
+    if (requestUrl.pathname === "/api/ef-primary/context") return sendJson(res, 200, await efPrimary.context());
     if (requestUrl.pathname === "/api/equities") return sendJson(res, 200, equityStructural.getState());
     if (requestUrl.pathname === ENERGY_FUELS_CONTEXT_PATH) return sendJson(res, 200,
       { ...energyFuelsContext(structural.getState(), equityStructural.getState(), catalysts.getState()),
-        handoff: energyFuelsHandoff.getState() });
+        handoff: energyFuelsHandoff.getState(), primarySources: await efPrimary.context() });
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
     if (requestUrl.pathname === "/api/oil-monitor") return sendJson(res, 200, oilMonitor.getState());
 
@@ -521,6 +537,7 @@ server.listen(PORT, BIND_ADDRESS, () => {
   eia.start();
   ecb.start();
   oilMonitor.start().catch((error) => console.error("777 oil monitor start error:", error.message));
+  efPrimary.start().then(() => deliveryProbe.run()).catch((error) => console.error("777 EF primary start error:", redactError(error)));
 });
 
 let shutdownStarted = false;
@@ -529,8 +546,13 @@ function shutdown(signal) {
   shutdownStarted = true;
   console.log(`777 graceful shutdown: ${signal}`);
   try { oilMonitor.stop(); } catch (error) { console.error("777 oil monitor shutdown error:", error.message); }
-  server.close(() => process.exit(0));
-  const timer = setTimeout(() => process.exit(1), 10000);
+  const closed = new Promise(resolve => server.close(resolve));
+  const stopped = efPrimary.stop();
+  const probeStopped = deliveryProbe.stop();
+  Promise.all([closed, stopped, probeStopped]).then(() => process.exit(0)).catch((error) => {
+    console.error("777 shutdown error:", redactError(error)); process.exit(1);
+  });
+  const timer = setTimeout(() => process.exit(1), 30000);
   if (typeof timer.unref === "function") timer.unref();
 }
 

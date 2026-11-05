@@ -1,8 +1,9 @@
 "use strict";
 
 const fs = require("fs");
-const { spawn, spawnSync } = require("child_process");
+const { spawnSync } = require("child_process");
 const { runRecoveryBackup } = require("./recovery-backup-v1");
+const { prepareBackupExport } = require("./private-backup-v1");
 
 function parsePasswdEntry(contents, account) {
   const line = String(contents)
@@ -35,42 +36,48 @@ function prepareDataDirectory(dataDir, account = "node") {
   process.setuid(uid);
 }
 
-function prepareStartup({ dataDir, recoveryBackupId, prepare = prepareDataDirectory }) {
+function prepareStartup({ dataDir, recoveryBackupId, backupAccessKey = process.env.RADAR_BACKUP_ACCESS_KEY,
+  prepare = prepareDataDirectory, prepareExport = prepareBackupExport,
+  runtimeAccount = () => parsePasswdEntry(fs.readFileSync("/etc/passwd", "utf8"), "node"),
+  privileged = typeof process.getuid === "function" && process.getuid() === 0 }) {
   const backup = runRecoveryBackup({ dataDir, id: recoveryBackupId });
   if (backup.enabled) console.log(`777 recovery backup ${backup.reused ? "verified" : "completed"}: ${backup.id}; ${backup.files} files; ${backup.bytes} bytes; same-volume copy`);
+  if (backup.enabled && backupAccessKey && privileged) {
+    const account = runtimeAccount();
+    const exported = prepareExport({ dataDir, id: recoveryBackupId, accessKey: backupAccessKey, ...account });
+    if (exported.enabled) console.log("777 configured recovery snapshot prepared for authenticated export");
+  }
   prepare(dataDir);
   return backup;
 }
 
-function main() {
-  const dataDir = process.env.RADAR_DATA_DIR || "/data";
-  prepareStartup({ dataDir, recoveryBackupId: process.env.RADAR_RECOVERY_BACKUP_ID });
+function main({
+  env = process.env,
+  prepare = prepareStartup,
+  runDedupe = () => spawnSync(process.execPath, [require.resolve("./journal-dedupe-v4.js")], { stdio: "inherit" }),
+  loadServer = () => require("./server-v4.js")
+} = {}) {
+  const dataDir = env.RADAR_DATA_DIR || "/data";
+  prepare({ dataDir, recoveryBackupId: env.RADAR_RECOVERY_BACKUP_ID, backupAccessKey: env.RADAR_BACKUP_ACCESS_KEY });
 
-  const dedupe = spawnSync(process.execPath, ["journal-dedupe-v4.js"], { stdio: "inherit" });
+  const dedupe = runDedupe();
   if (dedupe.error) throw dedupe.error;
-  if (dedupe.status !== 0) process.exit(dedupe.status || 1);
-
-  const server = spawn(process.execPath, ["server-v4.js"], { stdio: "inherit" });
-  let stopping = false;
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => {
-      if (stopping) return;
-      stopping = true;
-      server.kill(signal);
-    });
+  if (dedupe.status !== 0) {
+    const error = new Error("777 prestart journal check failed");
+    error.exitCode = dedupe.status || 1;
+    throw error;
   }
-  server.on("error", (error) => {
-    console.error(`777 entrypoint failed: ${error.message}`);
-    process.exit(1);
-  });
-  server.on("exit", (code) => process.exit(code ?? (stopping ? 0 : 1)));
+
+  // The server owns the HTTP listener, scheduler and shutdown handlers in this
+  // same unprivileged process. Do not retain a second Node supervisor in RAM.
+  return loadServer();
 }
 
-module.exports = { parsePasswdEntry, prepareDataDirectory, prepareStartup };
+module.exports = { parsePasswdEntry, prepareDataDirectory, prepareStartup, main };
 
 if (require.main === module) {
   try { main(); } catch (error) {
     console.error(`777 entrypoint failed: ${error.message}`);
-    process.exit(1);
+    process.exit(error.exitCode || 1);
   }
 }
