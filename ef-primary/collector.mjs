@@ -2,27 +2,71 @@ import {SOURCES} from './sources.mjs';
 import {digest,plain,classBody,parseListing,mofcomUnitUrl,eventId} from './parsers.mjs';
 import {openStore} from './store.mjs';
 
-export function makeHttpReader({fetchImpl=fetch,userAgent='EnergyFuelsResearchCollector/1.0 (personal public-news monitor)',timeoutMs=15000,maxBytes=2_000_000,minimumHostIntervalMs=300}={}) {
+const TRANSIENT_CODES=new Set(['EAI_AGAIN','ECONNRESET','ECONNREFUSED','ETIMEDOUT','ENETUNREACH','EHOSTUNREACH','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET']);
+function errorCodes(error){
+ const codes=[],queue=[error],seen=new Set();
+ for(let i=0;i<queue.length&&i<12;i++){
+  const value=queue[i];if(!value||typeof value!=='object'||seen.has(value))continue;seen.add(value);
+  if(typeof value.code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test(value.code))codes.push(value.code);
+  if(value.name==='TimeoutError')codes.push('TIMEOUT');
+  if(value.cause)queue.push(value.cause);
+  if(Array.isArray(value.errors))queue.push(...value.errors.slice(0,8));
+ }
+ return [...new Set(codes)].slice(0,8);
+}
+function transportError(error,host,stage){
+ const codes=errorCodes(error),summary=codes.join(',')||'UNKNOWN_TRANSPORT_ERROR';
+ const wrapped=new Error(`HTTP ${stage} failed at ${host}: ${summary}`,{cause:error});
+ // A mixed failure must not let a transient address error override a TLS,
+ // certificate, permission or other permanent/unknown failure.
+ wrapped.transient=codes.length>0&&codes.every(code=>code==='TIMEOUT'||TRANSIENT_CODES.has(code));
+ return wrapped;
+}
+
+export function makeHttpReader({fetchImpl=fetch,userAgent='EnergyFuelsResearchCollector/1.0 (personal public-news monitor)',timeoutMs=15000,maxBytes=2_000_000,minimumHostIntervalMs=300,retryDelayMs=500}={}) {
+ if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>30000)throw new Error('HTTP timeout must be 1..30000 ms');
+ if(!Number.isInteger(retryDelayMs)||retryDelayMs<0||retryDelayMs>2000)throw new Error('Retry delay must be 0..2000 ms');
  const allowed=new Set(SOURCES.map(s=>new URL(s.url).hostname)),lastRequest=new Map();
- return async function read(url){
+ const read=async function(url,{beforeRequest}={}){
   const original=new URL(url);if(original.protocol!=='https:'||!allowed.has(original.hostname))throw new Error('URL outside source allowlist');
-  let current=original;
-  for(let redirects=0;redirects<4;redirects++){
+  let requestAttempts=0;const recoveredErrors=[];
+  // Only one retry of the same public GET. No alternate host, proxy, identity or
+  // access-denied bypass. Redirects and retries consume the shared scan budget.
+  for(let attempt=0;attempt<2;attempt++){
+   let current=original;
+   try{for(let redirects=0;redirects<4;redirects++){
    if(current.protocol!=='https:'||current.hostname!==original.hostname)throw new Error('Cross-host redirect blocked');
    const pause=minimumHostIntervalMs-(Date.now()-(lastRequest.get(current.hostname)||0));if(pause>0)await new Promise(r=>setTimeout(r,pause));
+   const remaining=beforeRequest?.()??timeoutMs;
    lastRequest.set(current.hostname,Date.now());
-   const response=await fetchImpl(current.href,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(timeoutMs),headers:{'user-agent':userAgent,accept:'application/rss+xml,application/json,text/html,text/xml;q=0.9', 'accept-encoding':'gzip, deflate'}});
+   requestAttempts++;
+   let response;
+   try{response=await fetchImpl(current.href,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(Math.max(1,Math.ceil(Math.min(timeoutMs,remaining)))),headers:{'user-agent':userAgent,accept:'application/rss+xml,application/json,text/html,text/xml;q=0.9', 'accept-encoding':'gzip, deflate'}});}
+   catch(error){throw transportError(error,current.hostname,'connection');}
    if([301,302,303,307,308].includes(response.status)){await response.body?.cancel();const location=response.headers.get('location');if(!location)throw new Error('Redirect without location');current=new URL(location,current);continue;}
-   if(response.status!==200){await response.body?.cancel();throw new Error(`HTTP ${response.status} at ${current.hostname}`);}
+   if(response.status!==200){
+    await response.body?.cancel();const error=new Error(`HTTP ${response.status} at ${current.hostname}`);
+    // Retry-After blocks this reader's immediate retry. This local retry policy
+    // does not persist a server-specified cooldown across scheduled scans.
+    error.transient=[502,503,504].includes(response.status)&&!response.headers.has('retry-after');throw error;
+   }
    if(Number(response.headers.get('content-length'))>maxBytes){await response.body?.cancel();throw new Error('Source exceeds response size limit');}
    const chunks=[];let bytes=0;
-   for await(const chunk of response.body){bytes+=chunk.length;if(bytes>maxBytes){throw new Error('Source exceeds response size limit');}chunks.push(chunk);}
+   try{for await(const chunk of response.body){bytes+=chunk.length;if(bytes>maxBytes){const error=new Error('Source exceeds response size limit');error.responseSizeLimit=true;throw error;}chunks.push(chunk);}}
+   catch(error){if(error.responseSizeLimit)throw error;throw transportError(error,current.hostname,'body');}
    const buffer=Buffer.concat(chunks),header=response.headers.get('content-type')||'';
    const encoding=/iso-8859-1|windows-1252/i.test(header+' '+buffer.subarray(0,160).toString('ascii'))?'windows-1252':'utf-8';
    const body=new TextDecoder(encoding).decode(buffer);
-   return {body,receipt:{url:current.href,status:200,contentType:header,bytes,sha256:digest(buffer),fetchedAt:new Date().toISOString()}};
-  }throw new Error('Too many redirects');
+   return {body,receipt:{url:current.href,status:200,contentType:header,bytes,sha256:digest(buffer),fetchedAt:new Date().toISOString(),requestAttempts,retryCount:attempt,recoveredErrors}};
+   }throw new Error('Too many redirects');
+   }catch(error){
+    if(attempt===1||error.transient!==true)throw error;
+    recoveredErrors.push(error.message.slice(0,250));
+    if(retryDelayMs)await new Promise(r=>setTimeout(r,retryDelayMs));
+   }
+  }
  };
+ Object.defineProperty(read,'supportsHttpBudget',{value:true});return read;
 }
 
 export async function loadSource(source,read) {
@@ -58,10 +102,15 @@ export async function collect({directory,sources=SOURCES,read=makeHttpReader(),n
  if(!Number.isFinite(runBudgetMs)||runBudgetMs<1||runBudgetMs>180000)throw new Error('Run budget must be at most 180 seconds');
  if(Number.isNaN(Date.parse(now)))throw new Error('Invalid scan time');
  let requests=0;const started=performance.now();
- const boundedRead=async url=>{
+ const beforeRequest=()=>{
   if(requests>=maxRequests)throw new Error('Per-run HTTP request limit reached');
-  if(performance.now()-started>runBudgetMs)throw new Error('Per-run time limit reached');
-  requests++;return read(url);
+  const remaining=runBudgetMs-(performance.now()-started);
+  if(remaining<=0)throw new Error('Per-run time limit reached');
+  requests++;return remaining;
+ };
+ const boundedRead=async url=>{
+  if(read.supportsHttpBudget)return read(url,{beforeRequest});
+  beforeRequest();return read(url); // Injected parsers/fixtures keep the existing API.
  };
  const store=await storeFactory(directory);
  try{
