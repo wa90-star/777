@@ -65,7 +65,7 @@ function createEfPrimaryRuntime({
         if (onSourceNotices) {
           try {
             const notices = await collector.listPendingNotices(directory, { limit: 30, actionableOnly: true });
-            onSourceNotices(notices);
+            Promise.resolve(onSourceNotices(notices)).catch(() => logger.error("EF optional internal context unavailable; source delivery remains independent"));
           } catch { logger.error("EF optional internal context unavailable; source delivery remains independent"); }
         }
         if (deliveryPaused || !transport?.configured() || (state.retryAt && now() < Date.parse(state.retryAt))) return;

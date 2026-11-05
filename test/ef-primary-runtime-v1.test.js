@@ -69,6 +69,16 @@ test("notice labels assessment uncertainty and stable identity", () => {
   assert.match(text, /noch zu prüfen/); assert.match(text, /Keine Handelsfreigabe/); assert.match(text, /Hinweis-ID: notice:abc/);
   assert.ok(text.length < 4096);
 });
+
+test("rejected asynchronous context observer cannot escape as an unhandled rejection", async () => {
+  const f = fixture({ onSourceNotices: async () => { throw new Error("synthetic asynchronous context failure"); } });
+  await f.runtime.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.sends, 1);
+  assert.equal(f.calls.acks, 1);
+  assert.equal(f.runtime.getState().lastDeliveryError, null);
+  await f.runtime.stop();
+});
 test("future source time and later thesis review stay explicit in messages", () => {
   assert.match(formatNotice({ ...sample, publishedAt: "2099-01-01T00:00:00Z", publicationTimeStatus: "FUTURE_DATED_UNVERIFIED" }), /liegt in der Zukunft/);
   const text = formatNotice({ ...sample, kind: "RISK_REVIEW_REQUIRED", thesisId: "uranium-supply", decisionVersion: "2", explanation: "New evidence changes the earlier assumption" });
