@@ -13,7 +13,7 @@ function fixture(options = {}) {
   };
   const transport = { configured: () => true, send: async () => { calls.sends++; return { message_id: 8 }; } };
   Object.assign(collector, options.collector); Object.assign(transport, options.transport);
-  const runtime = createEfPrimaryRuntime({ enabled: true, intervalMinutes: 10, directory: "unused", moduleLoader: async () => collector, transport, now: () => clock, setTimer: () => ({ unref() {} }), clearTimer() {}, pause: async () => {}, logger: { error() {} } });
+  const runtime = createEfPrimaryRuntime({ enabled: true, intervalMinutes: 10, directory: "unused", moduleLoader: async () => collector, transport, onSourceNotices: options.onSourceNotices, now: () => clock, setTimer: () => ({ unref() {} }), clearTimer() {}, pause: async () => {}, logger: { error() {} } });
   return { calls, collector, transport, runtime, advance: ms => { clock += ms; } };
 }
 test("persists provider receipt and sends no duplicate on another run", async () => {
@@ -53,10 +53,31 @@ test("source failure is visible and does not pretend to be a clean scan", async 
   const f = fixture({ collector: { collect: async () => { throw new Error("bad source layout"); } } });
   await f.runtime.start(); assert.match(f.runtime.getState().lastCollectionError, /bad source layout/); await f.runtime.stop();
 });
+
+test("optional internal context observes sources before delivery and cannot block Telegram", async () => {
+  let observed;
+  const f = fixture({ onSourceNotices: notices => { observed = notices; throw new Error("synthetic context failure"); } });
+  await f.runtime.start();
+  assert.deepEqual(observed, [sample]);
+  assert.equal(f.calls.sends, 1);
+  assert.equal(f.calls.acks, 1);
+  assert.equal(f.runtime.getState().lastDeliveryError, null);
+  await f.runtime.stop();
+});
 test("notice labels assessment uncertainty and stable identity", () => {
   const text = formatNotice(sample);
   assert.match(text, /noch zu prüfen/); assert.match(text, /Keine Handelsfreigabe/); assert.match(text, /Hinweis-ID: notice:abc/);
   assert.ok(text.length < 4096);
+});
+
+test("rejected asynchronous context observer cannot escape as an unhandled rejection", async () => {
+  const f = fixture({ onSourceNotices: async () => { throw new Error("synthetic asynchronous context failure"); } });
+  await f.runtime.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.sends, 1);
+  assert.equal(f.calls.acks, 1);
+  assert.equal(f.runtime.getState().lastDeliveryError, null);
+  await f.runtime.stop();
 });
 test("future source time and later thesis review stay explicit in messages", () => {
   assert.match(formatNotice({ ...sample, publishedAt: "2099-01-01T00:00:00Z", publicationTimeStatus: "FUTURE_DATED_UNVERIFIED" }), /liegt in der Zukunft/);

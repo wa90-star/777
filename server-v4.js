@@ -19,6 +19,7 @@ const createEnergyFuelsHandoff = require("./energy-fuels-handoff-v1");
 const { createEfPrimaryRuntime } = require("./ef-primary-runtime-v1");
 const { createDeliveryProbe } = require("./delivery-probe-v1");
 const { createPrivateBackupHandler } = require("./private-backup-v1");
+const { createTwelveContextRuntime } = require("./twelve-context-runtime-v1");
 const VERSION = require("./package.json").version;
 
 const PORT = Number(process.env.PORT || process.env.RADAR_PORT || 3000);
@@ -30,7 +31,17 @@ const DELIVERY_MODE = process.env.RADAR_DELIVERY_MODE === "probe-only" ? "probe-
 const GENERAL_INFO_MODE = process.env.RADAR_GENERAL_INFO_MODE === "true";
 const alertTransport = { ...telegramTransport, configured: () => DELIVERY_MODE === "live" && telegramTransport.configured(),
   send: text => DELIVERY_MODE === "live" ? telegramTransport.send(text) : Promise.reject(new Error("Live alerts disabled during connection acceptance")) };
-const efPrimary = createEfPrimaryRuntime({ transport: alertTransport });
+const twelveContext = createTwelveContextRuntime({
+  enabled: process.env.RADAR_TWELVE_BASIC_CONTEXT === "true",
+  apiKey: process.env.TWELVE_BASIC_API_KEY,
+  directory: path.join(process.env.RADAR_DATA_DIR || "/data", "twelve-basic-context")
+});
+const efPrimary = createEfPrimaryRuntime({ transport: alertTransport,
+  onSourceNotices: notices => twelveContext.observeEvents(notices.map(notice => ({
+    id: notice.id, title: notice.title, publishedAt: notice.publishedAt, detectedAt: notice.createdAt,
+    relatedSymbols: notice.classification?.topics?.includes("company") ? ["UUUU"] : []
+  })))
+});
 const deliveryProbe = createDeliveryProbe({ transport: telegramTransport });
 const privateBackup = createPrivateBackupHandler({ dataDir: process.env.RADAR_DATA_DIR || "/data", id: process.env.RADAR_RECOVERY_BACKUP_ID, accessKey: process.env.RADAR_BACKUP_ACCESS_KEY });
 const ALLOWED_QUOTES = new Set(["GLD", "SLV", "USO", "UNG", "COPX", "DBA", "SPY", "QQQ", "TLT", "UUP"]);
@@ -208,6 +219,7 @@ function allowedQuoteSymbols() {
 }
 
 function queueStructuralEquityRecheck(items) {
+  twelveContext.observeEvents(items || []);
   if (!items?.length || !equityStructural) return Promise.resolve({ suppressed: true, reason: "no-verified-structural-event" });
   console.log(`777 structural equity recheck queued: ${items.length} verified structural event(s); market-window and execution gates retained`);
   return Promise.resolve()
@@ -221,6 +233,7 @@ function queueStructuralEquityRecheck(items) {
 }
 
 function queueMarketRecheck(items, source, refreshContext = false) {
+  twelveContext.observeEvents(items || []);
   if (items?.length) console.log(`777 event-driven market check queued: ${items.length} fresh ${source} catalyst(s); context refresh ${refreshContext ? "on" : "off"}; market-window gate retained`);
   return runDeferredMarketRecheck({ market, items, refreshContext }).catch((error) => {
     const message = redactError(error, [TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
@@ -398,6 +411,7 @@ function statusPayload() {
       limitation: "Source information does not confirm a price movement or authorize trading"
     },
     marketDataConfigured: marketState.alpacaConfigured,
+    alternativeMarketContext: twelveContext.getState(),
     marketDataSource: marketState.source,
     marketLastError: marketState.lastError ? redactError(marketState.lastError, [
       TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, process.env.APCA_API_KEY_ID,
@@ -507,6 +521,7 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/structural") return sendJson(res, 200, structural.getState());
     if (requestUrl.pathname === "/api/private-backup") return privateBackup(req, res);
     if (requestUrl.pathname === "/api/ef-primary/status") return sendJson(res, 200, efPrimary.getState());
+    if (requestUrl.pathname === "/api/market-context/status") return sendJson(res, 200, twelveContext.getState());
     if (requestUrl.pathname === "/api/ef-primary/context") return sendJson(res, 200, await efPrimary.context());
     if (requestUrl.pathname === "/api/equities") return sendJson(res, 200, equityStructural.getState());
     if (requestUrl.pathname === ENERGY_FUELS_CONTEXT_PATH) return sendJson(res, 200,
@@ -552,6 +567,7 @@ server.listen(PORT, BIND_ADDRESS, () => {
   console.log(`777 Kimi research: ${kimiResearch.getState().mode}; production influence disabled; Telegram influence disabled`);
   console.log(`777 public API: read-only; persistence journal ${journal.getState().persistence}; catalysts ${catalysts.getState().persistence}; EIA ${eia.getState().persistence}; ECB ${ecb.getState().persistence}`);
   market.start();
+  twelveContext.start();
   equityStructural.start();
   structural.start();
   catalysts.start();
@@ -570,7 +586,8 @@ function shutdown(signal) {
   const closed = new Promise(resolve => server.close(resolve));
   const stopped = efPrimary.stop();
   const probeStopped = deliveryProbe.stop();
-  Promise.all([closed, stopped, probeStopped]).then(() => process.exit(0)).catch((error) => {
+  const contextStopped = twelveContext.stop();
+  Promise.all([closed, stopped, probeStopped, contextStopped]).then(() => process.exit(0)).catch((error) => {
     console.error("777 shutdown error:", redactError(error)); process.exit(1);
   });
   const timer = setTimeout(() => process.exit(1), 30000);

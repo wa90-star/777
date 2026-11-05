@@ -21,6 +21,7 @@
 <div class="statusbar"><div class="statusleft"><span id="dot" class="dot"></span><span id="system">System wird geprüft</span></div><div id="clock" class="small">—</div></div>
 <section class="section"><div class="head"><h2>Allgemeiner Radar · Informationsbetrieb</h2><span id="infoBadge" class="badge">WIRD GEPRÜFT</span></div><div id="infoSummary" class="notice">Quellen- und Meldeverbindung werden geprüft.</div><div id="infoDelivery" class="notice">Zustellnachweise werden geladen.</div><div class="notice">Ausgewählte Politik-, Energie- und Zentralbankmeldungen können unabhängig von Kursdaten gemeldet werden. Eine Quellenmeldung bestätigt keine Kursbewegung. Nicht alle Aktien und Branchen sind abgedeckt.</div></section>
 <section class="section"><div class="head"><h2>Energy Fuels · Quellen und Zustellung</h2><span id="efBadge" class="badge">WIRD GEPRÜFT</span></div><div id="efSummary" class="notice">Quellenstatus wird geladen.</div><div id="efSources" class="sourcegrid"></div><div class="notice">Originalmeldungen und Branchenhinweise werden gesammelt. Wirtschaftliche Bedeutung und Auswirkungen auf die Anlagethese brauchen eine gesonderte Prüfung. Die Quellenabdeckung ist begrenzt; nach einem Versandabbruch sind Doppelmeldungen mit gleicher Hinweis-ID möglich.</div></section>
+<section class="section"><div class="head"><h2>Kurskontext ohne Alpaca</h2><span id="contextProviderBadge" class="badge">WIRD GEPRÜFT</span></div><div id="contextProviderSummary" class="notice">Verfügbarkeit und kostenloses Kontingent werden geprüft.</div><div class="notice">Twelve Data Basic dient ausschließlich der internen Analyse. Der US-Teilmarktfeed liefert keine vollständigen Börsenumsätze oder Geld-/Briefkurse. Kursdaten und daraus berechnete Bewegungen werden hier nicht veröffentlicht. Quellenhinweise laufen unabhängig weiter.</div></section>
 <div class="metrics">
   <div class="metric"><div class="k">Kern-Radar</div><div id="coreRate" class="v">—</div></div>
   <div class="metric"><div class="k">Qualitätsfilter</div><div id="corrMetric" class="v">—</div></div>
@@ -62,23 +63,33 @@ function renderInformationStatus(info,telegramDelivery){
     return `<div class="corrline ${status.error||count(status.failed)?'bad':'pending'}"><strong>${label}</strong> · ${count(status.pending)} ausstehend · ${count(status.failed)} fehlgeschlagen · ${count(status.sent)} als gesendet gespeichert · ${count(status.suppressed)} unterdrückt${error}<br>Letzter gespeicherter Anbieterbeleg: ${esc(receiptTime(status.lastReceiptAt))}.${legacy}</div>`;
   }).join('');
 }
+function renderAlternativeContext(context){
+  const c=context||{},p=c.provider,q=p?.quota,events=c.eventContext;
+  $('contextProviderBadge').textContent=!c.enabled?'NICHT AKTIV':!c.configured?'ZUGANG FEHLT':c.lastError?'BETRIEBSFEHLER':!p?'STARTET':p.failedSymbols?'ABRUF EINGESCHRÄNKT':!p.regularSessionWindow?'AUSSERHALB US-ZEITFENSTER':!p.observedSymbols?'WARTE AUF KURSKONTEXT':'INTERNER KURSKONTEXT';
+  $('contextProviderBadge').className=`badge ${c.lastError||p?.failedSymbols?'bad':'pending'}`;
+  $('contextProviderSummary').textContent=!p?'Der alternative Kurskontext ist noch nicht verfügbar; Quellenmeldungen bleiben davon unabhängig.':`${p.observedSymbols}/${p.configuredSymbols} Symbole erfasst · ${p.freshSymbols} innerhalb der kurzen Frischegrenze · ${p.failedSymbols} mit Abruffehler. Letzter Datenzeitpunkt: ${p.latestObservationAt?new Date(p.latestObservationAt).toLocaleString('de-DE'):'noch keine Beobachtung'}. Heute ${q.usedToday}/${q.dailyLimit} reservierte Abrufe; höchstens ${q.minuteLimit} pro Minute. ${q.cooldownUntil?'Anbieterpause bis '+new Date(q.cooldownUntil).toLocaleString('de-DE')+'. ':''}${events?.completed||0} Quellenereignisse intern ausgewertet. Das ist keine Handelsbestätigung. Zwischen den Abrufen bestehen Frischelücken; der Feiertagskalender ist nicht gesondert geprüft.`;
+}
 async function loadStatus(){
   try{
     const d=await get('/api/status'),info=d.generalInformation||{};
     $('dot').className='dot online';
-    $('system').textContent=d.marketDataConfigured?'System online · Kursverbindung konfiguriert':'System online · Kursverbindung fehlt';
+    $('system').textContent=d.marketDataConfigured?'System online · Kursverbindung konfiguriert':d.alternativeMarketContext?.provider?.observedSymbols?'System online · begrenzter interner Kurskontext':'System online · vollständige Kursverbindung fehlt';
     $('coreRate').textContent=`${d.coreIntervalMinutes} min`;
     $('corrMetric').textContent=`Regel: ${d.correlationRequired} Quellen`;
     $('qualityBadge').textContent=`REGEL: ${d.correlationRequired} BESTÄTIGUNGEN`;
     $('telegram').textContent=d.deliveryMode==='probe-only'?'Verbindung wird geprüft':!d.telegramConfigured?'nicht konfiguriert':d.telegramDelivery?.lastError?'Zustellfehler':d.telegramDelivery?.lastSuccessAt?`Zustellung ${time(d.telegramDelivery.lastSuccessAt)}`:'konfiguriert · ungetestet';
     $('lastAlert').textContent=time(d.lastAlertAt);
     renderInformationStatus(info,d.telegramDelivery);
-    $('infoSummary').textContent=!info.enabled?'Der allgemeine Informationsmodus ist hier noch nicht aktiviert.':`${info.deliveryEnabled?'Der Versand ist freigeschaltet; Zustellbelege und Fehler stehen separat darunter.':'Quellen werden gesammelt; der Versand ist noch nicht freigeschaltet.'} ${d.marketDataConfigured?'Kurszugang ist eingerichtet; jede Marktbestätigung benötigt weiterhin frische passende Daten.':'Aktuelle Aktien-/ETF-Kurse, Spread- und Volumenprüfungen fehlen. Daraus werden keine bestätigten Handelssignale abgeleitet.'}`;
+    renderAlternativeContext(d.alternativeMarketContext);
+    $('infoSummary').textContent=!info.enabled?'Der allgemeine Informationsmodus ist hier noch nicht aktiviert.':`${info.deliveryEnabled?'Der Versand ist freigeschaltet; Zustellbelege und Fehler stehen separat darunter.':'Quellen werden gesammelt; der Versand ist noch nicht freigeschaltet.'} ${d.marketDataConfigured?'Kurszugang ist eingerichtet; jede Marktbestätigung benötigt weiterhin frische passende Daten.':'Vollständige Kurs-, Spread- und Volumenprüfungen fehlen. Ein begrenzter interner Kurskontext wird separat ausgewiesen; daraus werden keine bestätigten Handelssignale abgeleitet.'}`;
   }catch(e){
     $('dot').className='dot error';$('system').textContent='System nicht erreichbar';
     $('infoBadge').textContent='NICHT ERREICHBAR';$('infoBadge').className='badge bad';
     $('infoSummary').textContent='Der aktuelle Betriebszustand kann nicht geprüft werden.';
     $('infoDelivery').textContent='Zustellnachweise können gerade nicht aktualisiert werden.';
+    $('contextProviderBadge').textContent='NICHT ERREICHBAR';
+    $('contextProviderBadge').className='badge bad';
+    $('contextProviderSummary').textContent='Der aktuelle Kurskontext-Status kann nicht geprüft werden.';
   }
 }
 async function loadOil(){

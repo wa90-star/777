@@ -29,6 +29,7 @@ function createEfPrimaryRuntime({
   directory = path.join(process.env.RADAR_DATA_DIR || "/data", "ef-primary"),
   intervalMinutes = Number(process.env.EF_POLL_MINUTES || 10),
   transport,
+  onSourceNotices,
   moduleLoader = () => import(pathToFileURL(path.join(__dirname, "ef-primary", "collector.mjs")).href),
   now = Date.now,
   setTimer = setTimeout,
@@ -61,6 +62,12 @@ function createEfPrimaryRuntime({
           } catch (error) { state.lastCollectionError = redactError(error); }
         }
         await refreshStatus();
+        if (onSourceNotices) {
+          try {
+            const notices = await collector.listPendingNotices(directory, { limit: 30, actionableOnly: true });
+            Promise.resolve(onSourceNotices(notices)).catch(() => logger.error("EF optional internal context unavailable; source delivery remains independent"));
+          } catch { logger.error("EF optional internal context unavailable; source delivery remains independent"); }
+        }
         if (deliveryPaused || !transport?.configured() || (state.retryAt && now() < Date.parse(state.retryAt))) return;
         const pending = await collector.listPendingNotices(directory, { limit: 10, actionableOnly: true });
         for (const notice of pending) {

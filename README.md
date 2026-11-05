@@ -10,4 +10,6 @@ Eine gespeicherte Energy-Fuels-Übergabe beweist keine Verarbeitung durch den se
 
 Fuer einen hostunabhaengigen Gratisbetrieb stehen ein Docker-Image, `compose.yaml` und der Leitfaden [ops/FREE-HOSTING.md](ops/FREE-HOSTING.md) bereit.
 
+Ein optionaler interner Kurskontext ohne Alpaca verwendet Twelve Data Basic mit dauerhaften Kontingentgrenzen. Aktivierung, Teilmarktabdeckung und Grenzen der Veröffentlichung sind in [ops/TWELVE-BASIC-CONTEXT.md](ops/TWELVE-BASIC-CONTEXT.md) beschrieben. Dieser Kontext beeinflusst keine Handelsfreigaben und blockiert keine Quellenmeldung.
+
 Die kontrollierte Kimi-K3-/Swarm-Anbindung ist in [ops/KIMI-INTEGRATION.md](ops/KIMI-INTEGRATION.md) beschrieben und bleibt zunächst strikt im Shadow-Modus.
