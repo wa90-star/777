@@ -1,0 +1,59 @@
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { createTwelveBasicContext } = require("../twelve-basic-context-v1");
+const START = Date.parse("2026-11-05T15:00:30Z"), MINUTE = 60000;
+function fixture(symbol="UUUU", at=START-30000, price="100") { return { status:"ok", meta:{symbol,interval:"1min",currency:"USD",type:symbol==="SPY"?"ETF":"Common Stock",exchange:"NYSE",exchange_timezone:"America/New_York"}, values:[{datetime:new Date(at).toISOString().slice(0,19).replace("T"," "),close:price}] }; }
+function setup(t, options={}) {
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),"twelve-context-")); let at=START, calls=[];
+ const key="synthetic-test-secret-only";
+ let responder=(url)=>new Response(JSON.stringify(fixture(new URL(url).searchParams.get("symbol"),Math.floor(at/MINUTE)*MINUTE)),{headers:{"content-type":"application/json"}});
+ const args={directory,apiKey:key,symbols:["UUUU","SPY","MU"],now:()=>at,fetchImpl:async(url,opts)=>{calls.push({url,opts});return responder(url,opts);},...options};
+ let provider=createTwelveBasicContext(args);
+ t.after(()=>{provider.close();fs.rmSync(directory,{recursive:true,force:true});});
+ return {get provider(){return provider;},args,key,directory,calls,time:v=>at=v,respond:fn=>responder=fn,reopen:()=>{provider.close();provider=createTwelveBasicContext(args);return provider;}};
+}
+test("UTC minute bars produce internal context, public output never reveals prices or key",async t=>{
+ const s=setup(t); assert.equal((await s.provider.refresh("UUUU")).status,"fresh");
+ const v=s.provider.readInternal("UUUU"); assert.equal(v.price,100);assert.equal(v.observedAt,START-30000);assert.equal(v.executionEligible,false);assert.equal(v.timestampMeaning,"one-minute-bar-open-UTC");
+ const url=new URL(s.calls[0].url);assert.equal(url.origin,"https://api.twelvedata.com");assert.equal(url.pathname,"/time_series");assert.equal(url.searchParams.get("timezone"),"UTC");assert.equal(url.searchParams.get("prepost"),"false");assert.equal(url.searchParams.has("apikey"),false);
+ assert.equal(s.calls[0].opts.headers.Authorization,`apikey ${s.key}`);assert.equal(s.calls[0].opts.redirect,"error");
+ const p=s.provider.publicStatus();assert.equal(p.freshSymbols,1);assert.equal(p.quota.usedToday,1);
+ const text=JSON.stringify(p);for(const forbidden of [s.key,'"price"','"movePercent"','"close"','"UUUU"'])assert.equal(text.includes(forbidden),false);
+ assert.equal(p.privatePriceDisplayEnabled,false);
+});
+test("absence of key never fetches or pretends configured",async t=>{const s=setup(t,{apiKey:undefined});assert.equal((await s.provider.refresh("UUUU")).status,"not_configured");assert.equal(s.calls.length,0);assert.equal(s.provider.publicStatus().configured,false);});
+test("demo token is never a production credential",async t=>{const s=setup(t,{apiKey:"demo"});assert.equal(s.provider.publicStatus().configured,false);});
+test("allowlist prevents arbitrary symbols and arbitrary API costs",async t=>{const s=setup(t);assert.equal((await s.provider.refresh("EUR/USD")).status,"symbol_not_allowed");assert.equal(s.calls.length,0);});
+test("same-symbol concurrent requests spend one persisted credit",async t=>{const s=setup(t);const result=await Promise.all([s.provider.refresh("UUUU"),s.provider.refresh("UUUU")]);assert.deepEqual(result.map(x=>x.status),["fresh","cached_or_poll_interval"]);assert.equal(s.calls.length,1);});
+test("daily budget survives restart and fails before request",async t=>{const s=setup(t,{dailyLimit:1});await s.provider.refresh("UUUU");s.reopen();assert.equal((await s.provider.refresh("SPY")).status,"daily_budget");assert.equal(s.calls.length,1);assert.equal(s.provider.publicStatus().quota.usedToday,1);});
+test("sliding minute budget survives restart",async t=>{const s=setup(t,{minuteLimit:1});await s.provider.refresh("UUUU");s.reopen();assert.equal((await s.provider.refresh("SPY")).status,"minute_budget");s.time(START+61000);assert.equal((await s.provider.refresh("SPY")).status,"fresh");});
+test("HTTP 429 has no immediate retry and persisted Retry-After cooldown",async t=>{const s=setup(t);s.respond(()=>new Response("do not log provider error",{status:429,headers:{"retry-after":"1800"}}));assert.equal((await s.provider.refresh("UUUU")).status,"rate_limited");s.reopen();s.time(START+16*MINUTE);assert.equal((await s.provider.refresh("SPY")).status,"provider_cooldown");assert.equal(s.calls.length,1);});
+test("Retry-After longer than one day is respected across restart",async t=>{const s=setup(t);s.respond(()=>new Response("",{status:429,headers:{"retry-after":"172800"}}));await s.provider.refresh("UUUU");s.reopen();s.time(START+24*60*MINUTE);assert.equal((await s.provider.refresh("SPY")).status,"provider_cooldown");assert.equal(s.provider.publicStatus().quota.cooldownUntil,new Date(START+172800000).toISOString());assert.equal(s.calls.length,1);});
+test("HTTP503 Retry-After stops following symbols and survives restart",async t=>{const s=setup(t);s.respond(()=>new Response("",{status:503,headers:{"retry-after":new Date(START+1800000).toUTCString()}}));const r=await s.provider.pollDue();assert.equal(r.results[0].status,"provider_unavailable");assert.equal(r.results[1].status,"provider_cooldown");assert.equal(s.calls.length,1);s.reopen();s.time(START+16*MINUTE);assert.equal((await s.provider.refresh("MU")).status,"provider_cooldown");});
+test("JSON rate-limit response is also a failure, never a quote",async t=>{const s=setup(t);s.respond(()=>new Response(JSON.stringify({code:429,message:s.key})));assert.equal((await s.provider.refresh("UUUU")).status,"rate_limited");assert.equal(s.provider.readInternal("UUUU"),null);assert.equal(JSON.stringify(s.provider.publicStatus()).includes(s.key),false);});
+test("authentication error does not retry or expose response body",async t=>{const s=setup(t);s.respond(()=>new Response(s.key,{status:401}));assert.equal((await s.provider.refresh("UUUU")).status,"authentication_failed");assert.equal((await s.provider.refresh("SPY")).status,"provider_cooldown");assert.equal(s.calls.length,1);});
+test("older bars retain source age and are never a live trade signal",async t=>{const s=setup(t);s.respond(()=>new Response(JSON.stringify(fixture("UUUU",START-30*MINUTE-30000))));assert.equal((await s.provider.refresh("UUUU")).status,"stale");assert.equal(s.provider.readInternal("UUUU").fresh,false);assert.equal(s.provider.publicStatus().freshSymbols,0);assert.equal(s.provider.evaluateReaction("UUUU",{eventTime:START}).assessable,false);});
+test("future, missing, malformed UTC timestamps fail closed",async t=>{const s=setup(t);for(const value of ["2026-11-05 16:00:00",undefined,"2026-02-30 15:00:00","2026-11-05T15:00:00Z"]){const f=fixture();f.values[0].datetime=value;s.respond(()=>new Response(JSON.stringify(f)));assert.equal((await s.provider.refresh("UUUU")).status,"invalid_data");s.time(s.provider.publicStatus().quota.usedToday*6*MINUTE+START);}assert.equal(s.provider.readInternal("UUUU"),null);});
+test("wrong currency, identity, or interval cannot masquerade as US minute data",async t=>{const s=setup(t);let i=0;for(const patch of [{currency:"CAD"},{symbol:"EFR"},{interval:"1day"}]){const f=fixture();Object.assign(f.meta,patch);s.respond(()=>new Response(JSON.stringify(f)));assert.equal((await s.provider.refresh("UUUU")).status,"invalid_data");s.time(START+(++i)*6*MINUTE);}});
+test("network failure retains last observation timestamp without claiming successful current fetch",async t=>{const s=setup(t);await s.provider.refresh("UUUU");s.time(START+5*MINUTE);s.respond(()=>{throw new Error(s.key);});assert.equal((await s.provider.refresh("UUUU")).status,"provider_request_failed");assert.equal(s.provider.readInternal("UUUU").observedAt,START-30000);assert.equal(s.provider.readInternal("UUUU").currentFetchSucceeded,false);assert.equal(s.provider.readInternal("UUUU").fresh,false);});
+test("oversize response is bounded and never parsed as data",async t=>{const s=setup(t);s.respond(()=>new Response("x".repeat(65537)));assert.equal((await s.provider.refresh("UUUU")).status,"response_too_large");assert.equal(s.calls.length,1);});
+test("reaction requires fresh bars bracketing the event and stays internal only",async t=>{const s=setup(t);await s.provider.refresh("UUUU");s.time(START+5*MINUTE);s.respond(()=>new Response(JSON.stringify(fixture("UUUU",START+5*MINUTE-30000,"102"))));await s.provider.refresh("UUUU");const reaction=s.provider.evaluateReaction("UUUU",{eventTime:START+2*MINUTE});assert.equal(reaction.assessable,true);assert.ok(Math.abs(reaction.movePercent-2)<1e-10);assert.equal(reaction.thresholdReached,true);assert.equal(reaction.executionEligible,false);assert.equal(reaction.internalOnly,true);assert.equal(s.provider.evaluateReaction("UUUU",{eventTime:START-1000}).assessable,false);});
+test("closed session does not fetch or present previous close as current",async t=>{const s=setup(t);await s.provider.refresh("UUUU");s.time(Date.parse("2026-11-05T22:00:00Z"));assert.equal((await s.provider.refresh("SPY")).status,"outside_regular_session");assert.equal(s.calls.length,1);assert.equal(s.provider.readInternal("UUUU").fresh,false);});
+test("reaction preserves the fetched bar completeness caveat, including explicit false",async t=>{
+ const s=setup(t);await s.provider.refresh("UUUU");
+ s.time(START+5*MINUTE);s.respond(()=>new Response(JSON.stringify(fixture("UUUU",START+5*MINUTE-30000,"102"))));
+ await s.provider.refresh("UUUU");
+ assert.equal(s.provider.evaluateReaction("UUUU",{eventTime:START+2*MINUTE}).barMayBeIncomplete,true);
+ s.time(START+10*MINUTE);s.respond(()=>new Response(JSON.stringify(fixture("UUUU",START+9*MINUTE-30000,"103"))));
+ await s.provider.refresh("UUUU");
+ assert.equal(s.provider.evaluateReaction("UUUU",{eventTime:START+7*MINUTE}).barMayBeIncomplete,false);
+});
+test("unexpected premarket baseline cannot support regular-session reaction",async t=>{const s=setup(t);s.time(Date.parse("2026-11-05T14:30:30Z"));s.respond(()=>new Response(JSON.stringify(fixture("UUUU",Date.parse("2026-11-05T14:20:00Z")))));await s.provider.refresh("UUUU");s.time(Date.parse("2026-11-05T14:35:30Z"));s.respond(()=>new Response(JSON.stringify(fixture("UUUU",Date.parse("2026-11-05T14:35:00Z"),"102"))));await s.provider.refresh("UUUU");assert.equal(s.provider.evaluateReaction("UUUU",{eventTime:"2026-11-05T14:31:00Z"}).assessable,false);});
+test("clock rollback cannot reset quota or make old prices fresh",async t=>{const s=setup(t);await s.provider.refresh("UUUU");s.time(START-MINUTE);assert.equal((await s.provider.refresh("SPY")).status,"clock_regressed");assert.equal(s.calls.length,1);assert.equal(s.provider.readInternal("UUUU").fresh,false);});
+test("persisted quota has no API key or price records",async t=>{const s=setup(t);await s.provider.refresh("UUUU");const text=fs.readFileSync(path.join(s.directory,"twelve-basic-quota.sqlite")).toString();assert.equal(text.includes(s.key),false);assert.equal(text.includes('"price"'),false);});
+test("pollDue has bounded requests and produces only safe status metadata",async t=>{const s=setup(t);const result=await s.provider.pollDue({maxRequests:2});assert.equal(s.calls.length,2);assert.equal(result.results.length,2);assert.equal(JSON.stringify(result).includes('"price"'),false);});
+test("corrupt quota fails closed without replacing or resetting state",async t=>{const directory=fs.mkdtempSync(path.join(os.tmpdir(),"twelve-corrupt-"));t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));fs.writeFileSync(path.join(directory,"twelve-basic-quota.sqlite"),"broken");assert.throws(()=>createTwelveBasicContext({directory,apiKey:"synthetic-key"}));assert.equal(fs.readFileSync(path.join(directory,"twelve-basic-quota.sqlite"),"utf8"),"broken");});

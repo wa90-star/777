@@ -13,7 +13,7 @@ function fixture(options = {}) {
   };
   const transport = { configured: () => true, send: async () => { calls.sends++; return { message_id: 8 }; } };
   Object.assign(collector, options.collector); Object.assign(transport, options.transport);
-  const runtime = createEfPrimaryRuntime({ enabled: true, intervalMinutes: 10, directory: "unused", moduleLoader: async () => collector, transport, now: () => clock, setTimer: () => ({ unref() {} }), clearTimer() {}, pause: async () => {}, logger: { error() {} } });
+  const runtime = createEfPrimaryRuntime({ enabled: true, intervalMinutes: 10, directory: "unused", moduleLoader: async () => collector, transport, onSourceNotices: options.onSourceNotices, now: () => clock, setTimer: () => ({ unref() {} }), clearTimer() {}, pause: async () => {}, logger: { error() {} } });
   return { calls, collector, transport, runtime, advance: ms => { clock += ms; } };
 }
 test("persists provider receipt and sends no duplicate on another run", async () => {
@@ -52,6 +52,17 @@ test("missing credentials still collects and retains notice", async () => {
 test("source failure is visible and does not pretend to be a clean scan", async () => {
   const f = fixture({ collector: { collect: async () => { throw new Error("bad source layout"); } } });
   await f.runtime.start(); assert.match(f.runtime.getState().lastCollectionError, /bad source layout/); await f.runtime.stop();
+});
+
+test("optional internal context observes sources before delivery and cannot block Telegram", async () => {
+  let observed;
+  const f = fixture({ onSourceNotices: notices => { observed = notices; throw new Error("synthetic context failure"); } });
+  await f.runtime.start();
+  assert.deepEqual(observed, [sample]);
+  assert.equal(f.calls.sends, 1);
+  assert.equal(f.calls.acks, 1);
+  assert.equal(f.runtime.getState().lastDeliveryError, null);
+  await f.runtime.stop();
 });
 test("notice labels assessment uncertainty and stable identity", () => {
   const text = formatNotice(sample);

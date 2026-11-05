@@ -30,9 +30,9 @@ test("real local API serves persisted EF context read-only with honest ownership
   }));
   const env = { ...process.env, PORT: "0", RADAR_PORT: "0", RADAR_BIND_ADDRESS: "127.0.0.1",
     RADAR_DATA_DIR: dir, OIL_DATA_MODE: "free-proxy", KIMI_RESEARCH_MODE: "off", RADAR_GENERAL_INFO_MODE: "true",
-    RADAR_FREE_ONLY: "true", RADAR_EF_PRIMARY_ENABLED: "false", RADAR_DELIVERY_MODE: "probe-only" };
+    RADAR_FREE_ONLY: "true", RADAR_EF_PRIMARY_ENABLED: "false", RADAR_DELIVERY_MODE: "probe-only", RADAR_TWELVE_BASIC_CONTEXT: "true" };
   for (const key of ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-    "TWELVE", "MASSIVE_API_KEY", "RADAR_RECOVERY_BACKUP_ID", "RADAR_DELIVERY_PROBE_ID", "RADAR_BACKUP_ACCESS_KEY", "NODE_OPTIONS"]) delete env[key];
+    "TWELVE", "TWELVE_BASIC_API_KEY", "MASSIVE_API_KEY", "RADAR_RECOVERY_BACKUP_ID", "RADAR_DELIVERY_PROBE_ID", "RADAR_BACKUP_ACCESS_KEY", "NODE_OPTIONS"]) delete env[key];
   const child = spawn(process.execPath, [path.join(__dirname, "..", "server-v4.js")], {
     env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true
   });
@@ -65,6 +65,14 @@ test("real local API serves persisted EF context read-only with honest ownership
   assert.equal(status.generalInformation.marketDataConfigured, false);
   assert.equal(status.generalInformation.informationNoticesExecutionEligible, false);
   assert.equal(status.generalInformation.notificationMode, "PRIMARY_SOURCE_INFORMATION");
+  assert.equal(status.alternativeMarketContext.enabled, true);
+  assert.equal(status.alternativeMarketContext.configured, false);
+  assert.equal(status.alternativeMarketContext.executionEligible, false);
+  const contextStatus = await (await fetch(base + "/api/market-context/status")).json();
+  assert.equal(contextStatus.configured, false);
+  assert.equal(contextStatus.provider, null);
+  assert.equal(contextStatus.eventContext.resultsExposure, "none");
+  assert.equal((await fetch(base + "/api/market-context/status", { method: "POST" })).status, 405);
   const information = status.generalInformation.informationDeliveryStatus;
   assert.deepEqual(Object.keys(information), ["policy", "eia", "ecb"]);
   assert.equal(information.policy.pending, 1);
