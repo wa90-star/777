@@ -27,6 +27,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const telegramTransport = createTelegramTransport({ token: TELEGRAM_BOT_TOKEN, chatId: TELEGRAM_CHAT_ID, verifyPrivateTarget: true });
 const DELIVERY_MODE = process.env.RADAR_DELIVERY_MODE === "probe-only" ? "probe-only" : "live";
+const GENERAL_INFO_MODE = process.env.RADAR_GENERAL_INFO_MODE === "true";
 const alertTransport = { ...telegramTransport, configured: () => DELIVERY_MODE === "live" && telegramTransport.configured(),
   send: text => DELIVERY_MODE === "live" ? telegramTransport.send(text) : Promise.reject(new Error("Live alerts disabled during connection acceptance")) };
 const efPrimary = createEfPrimaryRuntime({ transport: alertTransport });
@@ -239,6 +240,7 @@ const catalysts = createCatalystEngine({
 });
 
 const eia = createEiaEngine({
+  energyFuelsHandoff,
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert,
@@ -246,6 +248,9 @@ const eia = createEiaEngine({
 });
 
 const ecb = createEcbEngine({
+  sendMessage: sendTelegramMessage,
+  telegramConfigured,
+  onAlert: recordAlert,
   onFreshRelevant: (items) => queueMarketRecheck(items, "ECB", true)
 });
 
@@ -375,7 +380,23 @@ function statusPayload() {
     telegramDelivery: telegramTransport.getState(),
     deliveryProbe: deliveryProbe.getState(),
     energyFuelsPrimary: efPrimary.getState(),
-    deliveryStatus: { policy: policyState.deliveryStatus, eia: eiaState.deliveryStatus },
+    deliveryStatus: { policy: policyState.deliveryStatus, eia: eiaState.deliveryStatus, ecb: ecbState.deliveryStatus },
+    generalInformation: {
+      enabled: GENERAL_INFO_MODE,
+      notificationMode: GENERAL_INFO_MODE ? "PRIMARY_SOURCE_INFORMATION" : "LEGACY",
+      informationNoticesExecutionEligible: false,
+      deliveryEnabled: GENERAL_INFO_MODE && telegramConfigured(),
+      // Configuration is not a receipt or proof that the delivery queue is healthy.
+      informationDeliveryStatus: {
+        policy: policyState.informationDeliveryStatus || null,
+        eia: eiaState.informationDeliveryStatus || null,
+        ecb: ecbState.informationDeliveryStatus || null
+      },
+      marketDataConfigured: Boolean(marketState.alpacaConfigured),
+      sources: ["existing-policy-feeds", "official-eia", "official-ecb"],
+      scope: "Selected policy, energy and monetary-policy events; not exhaustive stock-market coverage",
+      limitation: "Source information does not confirm a price movement or authorize trading"
+    },
     marketDataConfigured: marketState.alpacaConfigured,
     marketDataSource: marketState.source,
     marketLastError: marketState.lastError ? redactError(marketState.lastError, [

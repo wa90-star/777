@@ -2,6 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const createDeliveryOutbox = require("./delivery-outbox-v1");
 const { isEnergyFuelsSpecific } = require("./signal-ownership-v1");
+const { administrativeCatalyst, sendInformationNotice, informationDeliveryStatus, persistInformationHandoff, restoreInformationHandoffs } = require("./general-information-v1");
+const writeDurableState = require("./durable-state-v1");
 
 const KEYWORDS = [
   "oil", "crude", "petroleum", "natural gas", "lng", "pipeline",
@@ -238,7 +240,7 @@ function classify(item, baseScore) {
   };
 }
 
-function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, onTrumpPost, energyFuelsHandoff }) {
+function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, onTrumpPost, energyFuelsHandoff, informationMode = process.env.RADAR_GENERAL_INFO_MODE === "true" }) {
   const seen = new Map();
   const primed = new Set();
   const preferredDir = process.env.RADAR_DATA_DIR || "/data";
@@ -268,12 +270,15 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
   const outbox = createDeliveryOutbox({
     persist: persistState,
     handlers: {
-      ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {}),
       telegram: {
         enabled: telegramConfigured,
-        // Apply at delivery too, including pending entries restored from disk.
-        // Keep market rechecks and persisted evidence; Fokus owns EF messages.
+        // Information mode has no connected native Fokus consumer receipt.
+        // Its durable handoff is independent; legacy routing stays unchanged.
         deliver: ([item]) => {
+          if (informationMode) {
+            if (administrativeCatalyst(item)) return { suppressed: true, reason: "administrative-catalyst-noise" };
+            return sendInformationNotice({ ...item, ownerDeliveryPending: isEnergyFuelsSpecific(item) }, sendMessage, "777 KATALYSATOR · INFORMATIONSHINWEIS");
+          }
           if (!isEnergyFuelsSpecific(item)) return sendMessage(formatAlert(item));
           if (!energyFuelsHandoff) throw new Error("Energy Fuels handoff is not configured");
           const receipt = energyFuelsHandoff.recordPolicy(item);
@@ -281,7 +286,10 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
           return { suppressed: true, reason: "energy-fuels-fokus-owner", handoffEventId: receipt.eventId };
         },
         onDelivered: () => onAlert?.(new Date().toISOString())
-      }
+      },
+      ...(informationMode ? { energyFuelsHandoff: { deliver: ([item]) => persistInformationHandoff(item, energyFuelsHandoff) } } : {}),
+      // Information delivery must not wait for unavailable quote-provider retries.
+      ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {})
     }
   });
 
@@ -302,10 +310,9 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
   }
 
   function persistState() {
-    if (!storageFile) return false;
+    if (!storageFile || (informationMode && !persistenceMode.startsWith("persistent:"))) return false;
     try {
-      const tmp = `${storageFile}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({
+      writeDurableState(storageFile, {
         version: 3,
         savedAt: new Date().toISOString(),
         seen: [...seen.entries()],
@@ -313,8 +320,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         items: state.items.slice(0, 30),
         trumpFeedHealth: state.trumpFeedHealth,
         deliveryOutbox: outbox.snapshot()
-      }, null, 2));
-      fs.renameSync(tmp, storageFile);
+      });
       return true;
     } catch (error) {
       console.error("777 catalyst persist error:", error.message);
@@ -345,7 +351,7 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
         }))
         .slice(0, 30);
       state.trumpFeedHealth = { ...state.trumpFeedHealth, ...(parsed.trumpFeedHealth || {}) };
-      outbox.restore(parsed.deliveryOutbox);
+      outbox.restore(restoreInformationHandoffs(parsed.deliveryOutbox, informationMode, isEnergyFuelsSpecific));
       persistState();
       console.log(`777 catalyst state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
@@ -500,7 +506,10 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       .filter((item) => item.priority === "HIGH")
       .filter((item) => Object.keys(item.directionalBiases || {}).length > 0 || (item.urgentKeywordHits || []).length > 0);
 
-    outbox.enqueue(alerts, allowDirectAlerts ? ["marketRecheck", "telegram"] : ["marketRecheck"]);
+    for (const item of alerts) outbox.enqueue([item], [
+      "marketRecheck", ...(allowDirectAlerts ? ["telegram"] : []),
+      ...(informationMode && allowDirectAlerts && isEnergyFuelsSpecific(item) ? ["energyFuelsHandoff"] : [])
+    ]);
     persistState();
     await outbox.drain();
     return { fresh, alerts };
@@ -708,6 +717,9 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       displayMaxAgeDays: DISPLAY_MAX_AGE_MS / 86400000,
       persistence: persistenceMode,
       deliveryStatus: outbox.getStatus(),
+      notificationMode: informationMode ? "source-information-only" : "legacy-catalyst",
+      informationNoticesExecutionEligible: false,
+      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox) : null,
       trumpFeedHealth: { ...state.trumpFeedHealth },
       pollingMinutes: {
         trumpTruth: POLL.trump / 60000,

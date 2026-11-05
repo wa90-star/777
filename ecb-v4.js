@@ -1,5 +1,8 @@
 const fs = require("fs");
 const path = require("path");
+const createDeliveryOutbox = require("./delivery-outbox-v1");
+const { sendInformationNotice, informationDeliveryStatus } = require("./general-information-v1");
+const writeDurableState = require("./durable-state-v1");
 
 const ECB_RSS_URL = "https://www.ecb.europa.eu/rss/press.html";
 const ACTIVE_POLL_MS = 5 * 60 * 1000;
@@ -126,7 +129,7 @@ function activeWindow() {
   return minutes >= 7 * 60 && minutes <= 20 * 60;
 }
 
-function createEcbEngine({ onFreshRelevant }) {
+function createEcbEngine({ onFreshRelevant, sendMessage, telegramConfigured = () => false, onAlert, informationMode = process.env.RADAR_GENERAL_INFO_MODE === "true" }) {
   const seen = new Map();
   const preferredDir = process.env.RADAR_DATA_DIR || "/data";
   let storageFile = null;
@@ -140,6 +143,15 @@ function createEcbEngine({ onFreshRelevant }) {
     source: { ok: null, lastScanAt: null, error: null },
     pollingMinutes: { active: ACTIVE_POLL_MS / 60000, idle: IDLE_POLL_MS / 60000 }
   };
+
+  const outbox = createDeliveryOutbox({ persist, handlers: {
+    telegram: {
+      enabled: () => informationMode && telegramConfigured() && typeof sendMessage === "function",
+      deliver: ([item]) => sendInformationNotice(item, sendMessage, "777 ECB · INFORMATIONSHINWEIS"),
+      onDelivered: () => onAlert?.(new Date().toISOString())
+    },
+    ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: items => onFreshRelevant(items) } } : {})
+  } });
 
   function initStorage() {
     for (const dir of [preferredDir, path.join("/tmp", "777-radar")]) {
@@ -158,19 +170,20 @@ function createEcbEngine({ onFreshRelevant }) {
   }
 
   function persist() {
-    if (!storageFile) return;
+    if (!storageFile || (informationMode && !persistenceMode.startsWith("persistent:"))) return false;
     try {
-      const tmp = `${storageFile}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({
-        version: 1,
+      writeDurableState(storageFile, {
+        version: 2,
         savedAt: new Date().toISOString(),
         primed,
         seen: [...seen.entries()],
-        items: state.items.slice(0, 30)
-      }, null, 2));
-      fs.renameSync(tmp, storageFile);
+        items: state.items.slice(0, 30),
+        deliveryOutbox: outbox.snapshot()
+      });
+      return true;
     } catch (error) {
       console.error("777 ECB persist error:", error.message);
+      return false;
     }
   }
 
@@ -188,6 +201,7 @@ function createEcbEngine({ onFreshRelevant }) {
       state.items = (Array.isArray(parsed.items) ? parsed.items : [])
         .filter((x) => x?.detectedAt && Date.now() - safeTime(x.detectedAt) <= SEEN_MAX_AGE_MS)
         .slice(0, 30);
+      outbox.restore(parsed.deliveryOutbox);
       persist();
       console.log(`777 ECB state loaded: ${seen.size} seen, ${state.items.length} items, ${persistenceMode}`);
     } catch (error) {
@@ -240,12 +254,9 @@ function createEcbEngine({ onFreshRelevant }) {
         for (const item of raw) seen.set(`ecb:${item.url || item.title}`, now);
         if (fresh.length) {
           state.items = [...fresh, ...state.items].slice(0, 30);
+          outbox.enqueue(fresh, informationMode ? ["telegram", "marketRecheck"] : ["marketRecheck"]);
           persist();
-          try {
-            await onFreshRelevant?.(fresh);
-          } catch (error) {
-            console.error("777 ECB trigger callback failed:", error.message);
-          }
+          await outbox.drain();
           console.log(`777 ECB material event detected: ${fresh.length}`);
         } else {
           persist();
@@ -276,6 +287,9 @@ function createEcbEngine({ onFreshRelevant }) {
 
   function start() {
     scheduleNext(20000);
+    const resume = setTimeout(() => outbox.drain().catch(error => console.error("777 ECB delivery failed:", error.message)), 1000);
+    const deliveries = setInterval(() => outbox.drain().catch(error => console.error("777 ECB delivery failed:", error.message)), 30000);
+    resume.unref?.(); deliveries.unref?.();
   }
 
   initStorage();
@@ -284,10 +298,15 @@ function createEcbEngine({ onFreshRelevant }) {
   return {
     start,
     scan,
+    drainDeliveries: outbox.drain,
     getState: () => ({
       ...state,
       sources: { europeanCentralBank: state.source },
       persistence: persistenceMode,
+      deliveryStatus: outbox.getStatus(),
+      notificationMode: informationMode ? "source-information-only" : "event-recheck-only",
+      informationNoticesExecutionEligible: false,
+      informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox) : null,
       rssUrl: ECB_RSS_URL,
       mode: "event-only; market confirmation required; no blind directional bias"
     })
