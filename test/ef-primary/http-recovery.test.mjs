@@ -67,9 +67,14 @@ test('exhausted wall-clock budget prevents the retry from starting',async t=>{
  const result=await collect({directory:dir,sources:[source],read,runBudgetMs:150});assert.equal(calls,1);assert.equal(result.requests,1);assert.match(result.results[0].error,/time limit/);
 });
 test('each built-in request signal respects the smaller remaining scan deadline',async t=>{
- const dir=await temp(t);let aborted=false;
- const read=makeHttpReader({...options,timeoutMs:1000,fetchImpl:async(_url,opts)=>{await new Promise(r=>setTimeout(r,250));aborted=opts.signal.aborted;opts.signal.throwIfAborted();return new Response(xml);}});
- const result=await collect({directory:dir,sources:[source],read,runBudgetMs:150});assert.equal(aborted,true);assert.equal(result.status,'DEGRADED');assert.equal(result.requests,1);
+ const dir=await temp(t);let elapsed=0,aborted=false;const signalBudgets=[];
+ // Exercise the budget-to-signal contract deterministically. A busy runner can
+ // spend the entire 150 ms opening SQLite before the old wall-clock test ever
+ // reached fetch, which incorrectly looked like a missing request abort.
+ t.mock.method(performance,'now',()=>elapsed);
+ t.mock.method(AbortSignal,'timeout',ms=>{signalBudgets.push(ms);return AbortSignal.abort(Object.assign(new Error('synthetic deadline'),{name:'TimeoutError'}));});
+ const read=makeHttpReader({...options,timeoutMs:1000,fetchImpl:async(_url,opts)=>{aborted=opts.signal.aborted;elapsed=151;opts.signal.throwIfAborted();return new Response(xml);}});
+ const result=await collect({directory:dir,sources:[source],read,runBudgetMs:150});assert.equal(aborted,true);assert.deepEqual(signalBudgets,[150]);assert.equal(result.status,'DEGRADED');assert.equal(result.requests,1);
 });
 test('failed later scan retains the successful baseline and event history',async t=>{
  const dir=await temp(t);const success=makeHttpReader({...options,fetchImpl:async()=>new Response(xml)});
