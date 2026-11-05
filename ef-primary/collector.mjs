@@ -1,6 +1,6 @@
 import {SOURCES} from './sources.mjs';
 import {digest,plain,classBody,parseListing,mofcomUnitUrl,eventId} from './parsers.mjs';
-import {openStore} from './store.mjs';
+import {openStore,openReadOnlyStore} from './store.mjs';
 
 const TRANSIENT_CODES=new Set(['EAI_AGAIN','ECONNRESET','ECONNREFUSED','ETIMEDOUT','ENETUNREACH','EHOSTUNREACH','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET']);
 function errorCodes(error){
@@ -92,6 +92,7 @@ export async function loadSource(source,read) {
 
 export async function readStatus(directory){const store=await openStore(directory);try{return store.status();}finally{store.close();}}
 export async function listPendingNotices(directory,options={}){const store=await openStore(directory);try{return store.pending(options);}finally{store.close();}}
+export async function listReviewFeed(directory,options={}){const store=await openReadOnlyStore(directory);try{return store.reviewFeed(options);}finally{store.close();}}
 export async function acknowledgeDelivery({directory,noticeId,receipt}){const store=await openStore(directory);try{return store.acknowledge(noticeId,receipt);}finally{store.close();}}
 export async function recordRiskReview({directory,...review}){const store=await openStore(directory);try{return store.riskReview(review);}finally{store.close();}}
 

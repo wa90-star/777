@@ -20,8 +20,8 @@ const sqlSchema=`
 `;
 
 export class SqliteStore {
- constructor(filename,{allowCreate=false,busyTimeoutMs=2000,beforeSchemaCommit}={}) {
-  this.db=new DatabaseSync(filename);
+ constructor(filename,{allowCreate=false,readOnly=false,busyTimeoutMs=2000,beforeSchemaCommit}={}) {
+  this.db=new DatabaseSync(filename,{readOnly});
   try{
    this.db.exec(`PRAGMA foreign_keys=ON; PRAGMA busy_timeout=${Math.max(0,Math.min(10000,Math.floor(busyTimeoutMs)))}; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA mmap_size=0;`);
    const tables=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
@@ -32,7 +32,8 @@ export class SqliteStore {
    }
    if(this.getMeta('schema')!==SCHEMA)throw new Error('Unsupported database schema');
    if(Number(this.db.prepare('PRAGMA page_size').get().page_size)!==4096)throw new Error('Unexpected database page size');
-   this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=128; PRAGMA max_page_count=${MAX_DATABASE_PAGES};`);
+   if(readOnly)this.db.exec('PRAGMA query_only=ON;');
+   else this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=128; PRAGMA max_page_count=${MAX_DATABASE_PAGES};`);
   }catch(err){this.db.close();throw err;}
  }
  close(){this.db.close();}
@@ -116,6 +117,53 @@ export class SqliteStore {
   const filter=actionableOnly?" AND json_extract(data,'$.classification.queue')='REVIEW'":'';
   return this.db.prepare("SELECT sequence,data,status,receipt FROM outbox WHERE status='pending' AND sequence>?"+filter+' ORDER BY sequence LIMIT ?').all(afterSequence,limit).map(r=>({...parse(r.data),sequence:r.sequence,deliveryStatus:r.status,deliveryReceipt:parse(r.receipt)}));
  }
+ reviewFeed(options={}){
+  const invalid=()=>Object.assign(new Error('Invalid review feed cursor or limit'),{code:'INVALID_REVIEW_FEED_QUERY'});
+  if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['afterSequence','throughSequence','limit'].includes(k)))throw invalid();
+  const {afterSequence=0,throughSequence,limit=20}=options;
+  if(!Number.isSafeInteger(afterSequence)||afterSequence<0||!Number.isInteger(limit)||limit<1||limit>50||
+     (throughSequence!==undefined&&(!Number.isSafeInteger(throughSequence)||throughSequence<afterSequence)))throw invalid();
+  // Deferred read transaction: the high-water mark and page share one snapshot.
+  // Never change a delivery status or store a consumer cursor during a GET.
+  this.db.exec('BEGIN');
+  try{
+   const filter="kind IN ('SOURCE_NEW','SOURCE_UPDATED')";
+   const latest=Number(this.db.prepare(`SELECT coalesce(max(sequence),0) n FROM outbox WHERE ${filter}`).get().n);
+   const through=throughSequence??latest;
+   if(afterSequence>latest||through>latest)throw invalid();
+   const projection=(alias,fields)=>`json_object(${Object.entries(fields).map(([key,size])=>`'${key}',substr(json_extract(${alias}.data,'$.${key}'),1,${size})`).join(',')})`;
+   const noticeProjection=projection('o',{id:100,eventId:100,kind:32,sourceId:80,publisher:120,url:2048,createdAt:64,contentVersion:100,publicationTimeStatus:64,changeScope:64});
+   const snapshotProjection=projection('r',{title:901,publishedAt:64,publishedRaw:160,form:32});
+   // Project in SQL before loading a page: historical article bodies and long
+   // source fields must not expand a bounded request into megabytes of RAM.
+   const rows=this.db.prepare(`SELECT o.sequence,${noticeProjection} data,o.status,${snapshotProjection} snapshot,
+     json_extract(o.data,'$.observationRevision') revision,json_extract(o.data,'$.classification') classification FROM outbox o LEFT JOIN revisions r
+     ON r.event_id=o.event_id AND r.version=json_extract(o.data,'$.contentVersion')
+     WHERE o.${filter} AND o.sequence>? AND o.sequence<=? ORDER BY o.sequence LIMIT ?`).all(afterSequence,through,limit+1);
+   const items=rows.slice(0,limit).map(row=>{
+    const notice=parse(row.data),snapshot=parse(row.snapshot),classification=parse(row.classification);
+    if(!snapshot||typeof snapshot.title!=='string'||!notice.contentVersion)throw new Error('Historical review snapshot is unavailable');
+    const clipped=(value,max)=>typeof value==='string'?value.slice(0,max):null;
+    // Explicit projection: no receipt, private thesis, portfolio, risk review,
+    // arbitrary stored fields or full third-party article body can escape.
+    return {sequence:row.sequence,id:notice.id,eventId:notice.eventId,kind:notice.kind,
+     sourceId:clipped(notice.sourceId,80),publisher:clipped(notice.publisher,120),url:clipped(notice.url,2048),
+     createdAt:clipped(notice.createdAt,64),contentVersion:notice.contentVersion,observationRevision:row.revision,
+     sourceSnapshot:{title:clipped(snapshot.title,900),titleTruncated:snapshot.title.length>900,
+      publishedAt:clipped(snapshot.publishedAt,64),publishedRaw:clipped(snapshot.publishedRaw,160),form:clipped(snapshot.form,32)},
+     publicationTimeStatus:clipped(notice.publicationTimeStatus,64),changeScope:clipped(notice.changeScope,64),
+     classification:{queue:classification?.queue==='REVIEW'?'REVIEW':'UNCLASSIFIED_REVIEW',
+      topics:(Array.isArray(classification?.topics)?classification.topics:[]).filter(t=>['company','nuclear','rare_earths','policy','demand'].includes(t)),
+      riskTermsPresent:classification?.riskTermsPresent===true,efImpact:'UNASSESSED',economicMateriality:'UNASSESSED'},
+     transportStatus:row.status,reviewStatus:'NOT_ACKNOWLEDGED_BY_THIS_FEED',tradePermission:false};
+   });
+   this.db.exec('COMMIT');
+   return {schema:1,scope:'POST_BASELINE_PRIMARY_SOURCE_NOTICES_ONLY',afterSequence,throughSequence:through,
+    nextAfterSequence:items.at(-1)?.sequence??afterSequence,hasMore:rows.length>limit,items,
+    nativeFokusAutomationConnected:false,consumerAcknowledged:false,tradePermission:false,
+    limitations:['Read access does not acknowledge analysis or delivery.','Baseline-only history and separate general-radar handoffs are outside this feed.','No full article text or private risk-review records are returned.']};
+  }catch(error){try{this.db.exec('ROLLBACK');}catch{}throw error;}
+ }
  acknowledge(noticeId,receipt){
   for(const key of ['provider','messageId','deliveredAt'])if(typeof receipt?.[key]!=='string'||!receipt[key].trim())throw new Error('Delivery acknowledgement requires provider, message ID and delivery time');
   if(Number.isNaN(Date.parse(receipt.deliveredAt)))throw new Error('Invalid delivery time');
@@ -163,6 +211,16 @@ async function exists(file){try{return await fs.stat(file);}catch(e){if(e.code==
 async function requireRegularFileOrAbsent(file){
  try{const s=await fs.lstat(file);if(s.isSymbolicLink()||!s.isFile()||s.nlink>1)throw new Error('State files must be regular files without symlinks/hardlinks');return s;}
  catch(e){if(e.code==='ENOENT')return null;throw e;}
+}
+export async function openReadOnlyStore(directory){
+ const stat=await fs.lstat(directory);
+ if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('Review history directory unavailable');
+ const dbFile=path.join(directory,'state.sqlite'),marker=path.join(directory,'sqlite-initialized');
+ for(const filename of [dbFile,marker])if(!await requireRegularFileOrAbsent(filename))throw new Error('Existing review history unavailable');
+ for(const suffix of ['-wal','-shm','-journal'])await requireRegularFileOrAbsent(dbFile+suffix);
+ const store=new SqliteStore(dbFile,{readOnly:true});
+ if(!store.getMeta('initialized')){store.close();throw new Error('Existing review history is not initialized');}
+ return store;
 }
 export async function openStore(directory,{beforeSchemaCommit}={}){
  await fs.mkdir(directory,{recursive:true});

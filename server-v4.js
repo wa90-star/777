@@ -523,6 +523,13 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/ef-primary/status") return sendJson(res, 200, efPrimary.getState());
     if (requestUrl.pathname === "/api/market-context/status") return sendJson(res, 200, twelveContext.getState());
     if (requestUrl.pathname === "/api/ef-primary/context") return sendJson(res, 200, await efPrimary.context());
+    if (requestUrl.pathname === "/api/ef-primary/review-feed") {
+      try { return sendJson(res, 200, await efPrimary.reviewFeed(requestUrl.searchParams)); }
+      catch (error) {
+        const invalid = error?.code === "INVALID_REVIEW_FEED_QUERY";
+        return sendJson(res, invalid ? 400 : 503, { error: invalid ? "Invalid review feed cursor or limit" : "Review feed unavailable" });
+      }
+    }
     if (requestUrl.pathname === "/api/equities") return sendJson(res, 200, equityStructural.getState());
     if (requestUrl.pathname === ENERGY_FUELS_CONTEXT_PATH) return sendJson(res, 200,
       { ...energyFuelsContext(structural.getState(), equityStructural.getState(), catalysts.getState()),

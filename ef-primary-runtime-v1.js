@@ -120,7 +120,21 @@ function createEfPrimaryRuntime({
     if (!enabled || !collector) return { ...getState(), pending: [] };
     return { ...getState(), pending: await collector.listPendingNotices(directory, { limit: 30, actionableOnly: false }) };
   }
-  return { start, stop, run, getState, context };
+  async function reviewFeed(params = new URLSearchParams()) {
+    const invalid = () => Object.assign(new Error("Invalid review feed cursor or limit"), { code: "INVALID_REVIEW_FEED_QUERY" });
+    if (!(params instanceof URLSearchParams)) throw invalid();
+    const options = {};
+    for (const [key, value] of params) {
+      if (!["afterSequence", "throughSequence", "limit"].includes(key) || Object.hasOwn(options, key)
+          || !/^(0|[1-9][0-9]{0,15})$/.test(value) || !Number.isSafeInteger(Number(value))) throw invalid();
+      options[key] = Number(value);
+    }
+    if (options.limit !== undefined && (options.limit < 1 || options.limit > 50)) throw invalid();
+    if (!enabled) throw Object.assign(new Error("Review feed unavailable"), { code: "REVIEW_FEED_UNAVAILABLE" });
+    collector ||= await moduleLoader();
+    return collector.listReviewFeed(directory, options);
+  }
+  return { start, stop, run, getState, context, reviewFeed };
 }
 
 module.exports = { createEfPrimaryRuntime, formatNotice };
