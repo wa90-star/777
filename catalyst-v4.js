@@ -660,13 +660,22 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       const href = m[1].startsWith("http") ? m[1] : `https://pelosi.house.gov${m[1]}`;
       const title = stripHtml(m[2]);
       if (!title || title.length < 12) continue;
+      // The official listing places the calendar date immediately after this
+      // heading. Match that structure, not a later date from a neighbouring row.
+      const tail = String(html).slice(m.index + m[0].length, m.index + m[0].length + 600);
+      const date = tail.match(/^\s*<\/div>\s*<div>\s*<div\b[^>]*>\s*<div\b[^>]*class=["'][^"']*\bcol-auto\b[^"']*["'][^>]*>\s*([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})\s*<\/div>/i);
+      const month = date ? ["January","February","March","April","May","June","July","August","September","October","November","December"].findIndex(x => x.toLowerCase() === date[1].toLowerCase()) : -1;
+      const calendar = date && month >= 0 ? new Date(Date.UTC(Number(date[3]), month, Number(date[2]))) : null;
+      const publishedAt = calendar && calendar.getUTCFullYear() === Number(date[3]) && calendar.getUTCMonth() === month && calendar.getUTCDate() === Number(date[2]) ? calendar.toISOString().slice(0, 10) : null;
+      if (unique.get(href)?.publishedAt && !publishedAt) continue;
       unique.set(href, {
         id: `pelosi:${href}`,
         source: "Nancy Pelosi · official statement",
         title,
         text: title,
         url: href,
-        publishedAt: null
+        publishedAt,
+        publicationPrecision: publishedAt ? "day" : "unknown"
       });
     }
     return [...unique.values()].slice(0, 20);
@@ -676,8 +685,13 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
     try {
       const html = await getText("https://pelosi.house.gov/news/press-releases", 10000);
       const items = pelosiItems(html);
-      await accept("pelosi", items, 65);
-      markSource("pelosiOfficial", true);
+      if (!items.length) throw new Error("No parseable official press-release entries");
+      const dated = items.filter(item => item.publishedAt && Date.parse(item.publishedAt) <= Date.now());
+      // An unknown date is a coverage gap, not evidence that an old page is new.
+      // Valid neighbouring entries continue through normal baseline/age rules.
+      if (dated.length) await accept("pelosi", dated, 65);
+      markSource("pelosiOfficial", dated.length === items.length,
+        dated.length === items.length ? null : "Official publication date missing, invalid or future for one or more entries");
     } catch (error) {
       markSource("pelosiOfficial", false, error.message);
       console.error("777 Pelosi source error:", error.message);
