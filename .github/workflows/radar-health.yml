@@ -1,6 +1,12 @@
 name: Radar production health
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/radar-health.yml'
+      - 'ops/health-*.mjs'
+      - 'test/health-*.test.mjs'
   schedule:
     - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
@@ -28,42 +34,50 @@ jobs:
         env:
           RADAR_BASE_URL: ${{ vars.RADAR_BASE_URL || 'https://radar-v5-image-production.up.railway.app' }}
           RADAR_MIN_VERSION: 5.2.1
+          RADAR_HEALTH_PROFILE: information
         run: node ops/health-check.mjs 2>&1 | tee /tmp/radar-health.txt
 
+      - name: Describe capabilities and delivery separately
+        id: report
+        continue-on-error: true
+        if: always() && steps.health.outcome != 'skipped'
+        shell: bash
+        run: node ops/health-report.mjs /tmp/radar-health.txt /tmp/radar-incident.md > /tmp/radar-fingerprint.txt
+
       - name: Open one incident on failure
-        if: steps.health.outcome == 'failure'
+        if: steps.health.outcome == 'failure' || steps.report.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          title='[Radar] Production endpoint unavailable'
-          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq 'map(select(.title == "[Radar] Production endpoint unavailable"))[0].number // empty')"
+          title='[Radar] Betriebs-, Quellen- oder Zustellprüfung auffällig'
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq 'map(select(.title == "[Radar] Production endpoint unavailable" or .title == "[Radar] Betriebs-, Quellen- oder Zustellprüfung auffällig"))[0].number // empty')"
           if [ -n "$existing" ]; then
+            previous="$(gh issue view "$existing" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')"
+            fingerprint="$(cat /tmp/radar-fingerprint.txt)"
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/radar-incident.md
+            if ! printf '%s' "$previous" | grep -Fq "radar-health-fingerprint:$fingerprint"; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/radar-incident.md
+            fi
             exit 0
           fi
-          {
-            printf 'Die unabhängige kostenlose Zustandsprüfung ist um %s fehlgeschlagen.\n\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            printf 'Workflow: %s/actions/runs/%s\n\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
-            printf 'Prüfergebnis:\n```text\n'
-            tail -c 3500 /tmp/radar-health.txt
-            printf '\n```\n'
-          } > /tmp/radar-incident.md
           gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/radar-incident.md
 
       - name: Close incident after recovery
-        if: steps.health.outcome == 'success'
+        if: steps.health.outcome == 'success' && steps.report.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq 'map(select(.title == "[Radar] Production endpoint unavailable"))[0].number // empty')"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq 'map(select(.title == "[Radar] Production endpoint unavailable" or .title == "[Radar] Betriebs-, Quellen- oder Zustellprüfung auffällig"))[0].number // empty')"
           if [ -n "$existing" ]; then
-            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --comment "Automatisch erholt am $(date -u +'%Y-%m-%dT%H:%M:%SZ')."
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/radar-incident.md
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" --comment "Die Betriebs-/Quellen-/Zustellprüfung ist erholt. Fehlende Fähigkeiten und historische Beleggrenzen stehen weiterhin im aktualisierten Bericht; dies bestätigt nicht die vollständige Zielerreichung."
           fi
 
       - name: Fail workflow on unhealthy production
-        if: steps.health.outcome == 'failure'
+        if: steps.health.outcome == 'failure' || steps.report.outcome == 'failure'
         shell: bash
         run: exit 1

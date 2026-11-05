@@ -158,6 +158,107 @@ export function assessHealth(
   return failures;
 }
 
+// The original strict profile remains the default. Information mode cannot make
+// absent trading data or an unproved ordinary delivery look fully healthy.
+const CAPABILITY_FAILURE = /^(?:market-data-not-configured|market-data-source-unexpected|oil-data-not-configured|oil-provider-not-configured|oil-provider-not-authenticated|oil-provider-not-connected|oil-source-unexpected|oil-monitor-not-live|market-provider-error:|oil-provider-error:|oil-monitor-error:)/;
+const MIXED_DELIVERY_FAILURE = /^delivery-(?:error|failed|backlog-stale):/;
+
+export function assessInformationHealth(status, oil, options = {}) {
+  const nowMs = options.nowMs ?? Date.now();
+  const strictFailures = assessHealth(status, oil, options);
+  const capabilityDegraded = strictFailures.filter(value => CAPABILITY_FAILURE.test(value));
+  // Mixed channel totals include Alpaca rechecks. Use Telegram's own totals;
+  // never mislabel those quote failures as failed messages.
+  const operationalFailures = strictFailures.filter(value => !CAPABILITY_FAILURE.test(value) && !MIXED_DELIVERY_FAILURE.test(value));
+  const reviewRequired = [];
+  const handoffPending = status?.energyFuelsHandoff?.pendingCount;
+  if (!Number.isInteger(handoffPending) || handoffPending < 0) operationalFailures.push("energy-fuels-handoff-pending-count-invalid");
+  else if (handoffPending > 0) reviewRequired.push(`energy-fuels-handoff-unconsumed:${handoffPending}`);
+  const info = status?.generalInformation;
+  if (info?.enabled !== true) operationalFailures.push("information-mode-not-enabled");
+  if (info?.notificationMode !== "PRIMARY_SOURCE_INFORMATION") operationalFailures.push("information-mode-contract-unexpected");
+  if (info?.informationNoticesExecutionEligible !== false) operationalFailures.push("information-trading-gate-unsafe");
+  if (info?.deliveryEnabled !== true) operationalFailures.push("information-delivery-not-enabled");
+  if (status?.energyFuelsPrimary?.enabled !== true) operationalFailures.push("ef-primary-not-enabled");
+  if (status?.energyFuelsPrimary?.configured !== true) operationalFailures.push("ef-primary-sender-not-configured");
+  const transport = status?.telegramDelivery;
+  if (transport?.configured !== true) operationalFailures.push("telegram-transport-not-configured");
+  if (transport?.targetType !== "private" || !Number.isFinite(Date.parse(transport?.targetVerifiedAt || ""))
+      || Date.parse(transport.targetVerifiedAt) > nowMs + 5 * 60000) {
+    operationalFailures.push("telegram-private-target-not-verified");
+  }
+  const channels = {};
+  for (const name of ["policy", "eia", "ecb"]) {
+    const channel = info?.informationDeliveryStatus?.[name];
+    channels[name] = channel || null;
+    if (!channel || ["pending", "failed", "sent", "suppressed"].some(key => !Number.isInteger(channel[key]) || channel[key] < 0)) {
+      operationalFailures.push(`information-delivery-state-invalid:${name}`);
+      continue;
+    }
+    if (channel.error === "delivery-expired-requires-review" && channel.failed > 0) {
+      reviewRequired.push(`information-delivery-expired:${name}:${channel.failed}`);
+    } else {
+      if (channel.error) operationalFailures.push(`information-delivery-error:${name}:${channel.error}`);
+      if (channel.failed > 0) operationalFailures.push(`information-delivery-failed:${name}:${channel.failed}`);
+    }
+    if (channel.pending > 0) {
+      // Older APIs do not expose a Telegram-specific timestamp. Do not borrow
+      // the age of an unrelated market/handoff channel or silently assume fresh.
+      if (!channel.oldestPendingAt) operationalFailures.push(`information-delivery-pending-age-unavailable:${name}`);
+      else if (!isFreshTimestamp(channel.oldestPendingAt, nowMs, 5 * 60000)) operationalFailures.push(`information-delivery-backlog-stale:${name}`);
+    }
+  }
+  const ef = status?.energyFuelsPrimary;
+  if (ef?.tradePermission !== false) operationalFailures.push("ef-primary-trading-gate-unsafe");
+  for (const key of ["pendingNotices", "pendingActionable", "pendingUnclassified", "deliveredNotices"]) {
+    if (!Number.isInteger(ef?.status?.[key]) || ef.status[key] < 0) operationalFailures.push(`ef-primary-delivery-count-invalid:${key}`);
+  }
+  for (const name of ["dod", "doe-main", "doe-ne", "ef-ir", "eia", "mofcom-orders", "mofcom-press", "mofcom-remarks", "sec", "usgs"]) {
+    if (!ef?.status?.sources?.[name]) operationalFailures.push(`ef-primary-required-source-missing:${name}`);
+  }
+  if (Number(ef?.status?.pendingActionable || 0) > 0) operationalFailures.push("ef-primary-actionable-backlog");
+  if (Number(ef?.status?.pendingUnclassified || 0) > 0) reviewRequired.push(`ef-primary-unclassified:${ef.status.pendingUnclassified}`);
+  if (ef?.nativeFokusAutomationConnected !== true) capabilityDegraded.push("native-fokus-consumer-not-connected");
+  const alternative = status?.alternativeMarketContext;
+  if (alternative?.enabled === true) {
+    if (alternative.executionEligible !== false || alternative.provider?.rawDataPublic !== false || alternative.provider?.privatePriceDisplayEnabled !== false) {
+      operationalFailures.push("alternative-market-context-safety-contract-invalid");
+    }
+    if (!alternative.configured || !alternative.running || alternative.lastError || !isFreshTimestamp(alternative.lastPollAt, nowMs, 60000)) {
+      capabilityDegraded.push("alternative-market-context-runtime-degraded");
+    }
+    if (alternative.provider?.regularSessionWindow === true && Number(alternative.provider.freshSymbols || 0) === 0) {
+      capabilityDegraded.push("alternative-market-context-no-fresh-observations");
+    }
+  }
+  const ordinaryReceipts = Object.values(channels).map(channel => channel?.lastReceiptAt)
+    .filter(value => Number.isFinite(Date.parse(value || "")) && Date.parse(value) <= nowMs + 5 * 60000);
+  const informationReceiptObserved = ordinaryReceipts.length > 0;
+  const efReceiptObserved = Number(ef?.status?.deliveredNotices) > 0 && Number.isFinite(Date.parse(ef?.lastDeliveryAt || ""))
+    && Date.parse(ef.lastDeliveryAt) <= nowMs + 5 * 60000;
+  if (efReceiptObserved) ordinaryReceipts.push(ef.lastDeliveryAt);
+  const probe = status?.deliveryProbe;
+  const connectionProbeObserved = probe?.status === "CONFIRMED" && Number.isInteger(probe.messageId) && probe.messageId > 0
+    && Number.isFinite(Date.parse(probe.providerAcceptedAt || "")) && Date.parse(probe.providerAcceptedAt) <= nowMs + 5 * 60000;
+  const state = operationalFailures.length ? "operational-failure" : reviewRequired.length ? "review-required"
+    : capabilityDegraded.length ? "capability-degraded" : ordinaryReceipts.length ? "monitored-checks-passed" : "delivery-verification-incomplete";
+  return {
+    profile: "information", state,
+    ok: !operationalFailures.length && !reviewRequired.length && !capabilityDegraded.length && ordinaryReceipts.length > 0,
+    operationalOk: operationalFailures.length === 0,
+    incidentRequired: operationalFailures.length > 0 || reviewRequired.length > 0,
+    goalComplete: false,
+    operationalFailures, capabilityDegraded, reviewRequired,
+    information: { enabled: info?.enabled === true, deliveryEnabled: info?.deliveryEnabled === true, channels },
+    deliveryEvidence: { ordinaryReceiptObserved: ordinaryReceipts.length > 0, informationReceiptObserved, efReceiptObserved,
+      latestStoredOrdinaryReceiptAt: ordinaryReceipts.sort().at(-1) || null,
+      connectionProbeObserved, connectionProbeAt: connectionProbeObserved ? probe.providerAcceptedAt : null,
+      deviceReadConfirmed: false,
+      limitation: "Saved provider receipts are historical evidence; they do not prove continuous delivery or that today's ordinary notice arrived." },
+    monitoringLimitation: "A successful sample does not prove continuous monitoring. Scheduled-run gaps need a separate observer."
+  };
+}
+
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -178,6 +279,7 @@ async function fetchJson(url, timeoutMs) {
 }
 
 export async function probe({
+  profile = process.env.RADAR_HEALTH_PROFILE || "strict",
   baseUrl = process.env.RADAR_BASE_URL || DEFAULT_BASE_URL,
   minimumVersion = process.env.RADAR_MIN_VERSION || DEFAULT_MIN_VERSION,
   expectedPersistencePath = process.env.RADAR_EXPECTED_PERSISTENCE_PATH || DEFAULT_EXPECTED_PERSISTENCE_PATH,
@@ -186,6 +288,7 @@ export async function probe({
   retryDelayMs = Number(process.env.RADAR_HEALTH_RETRY_DELAY_MS || 8000),
   now = Date.now
 } = {}) {
+  if (!new Set(["strict", "information"]).has(profile)) throw new Error(`Invalid health profile: ${profile}`);
   for (const [name, value, min, max] of [["attempts", attempts, 1, 5], ["timeoutMs", timeoutMs, 1, 30000], ["retryDelayMs", retryDelayMs, 0, 60000]]) {
     if (!Number.isInteger(value) || value < min || value > max) throw new Error(`Invalid ${name}: expected integer ${min}..${max}`);
   }
@@ -194,6 +297,7 @@ export async function probe({
   const statusUrl = new URL("/api/status", base);
   const oilUrl = new URL("/api/oil-monitor", base);
   const errors = [];
+  let assessment = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -204,6 +308,13 @@ export async function probe({
       const failedRequests = responses.filter((result) => result.status === "rejected");
       if (failedRequests.length) throw new Error(failedRequests.map((result) => result.reason.message).join("; "));
       const [status, oil] = responses.map((result) => result.value);
+      if (profile === "information") {
+        assessment = assessInformationHealth(status, oil, { minimumVersion, expectedPersistencePath, nowMs: now() });
+        if (!assessment.incidentRequired) return { ...assessment, checkedAt: new Date(now()).toISOString(), baseUrl: base.origin, version: status.version };
+        errors.push(`attempt ${attempt}: ${[...assessment.operationalFailures, ...assessment.reviewRequired].join(",")}`);
+        if (attempt < attempts) await wait(retryDelayMs);
+        continue;
+      }
       const failures = assessHealth(status, oil, { minimumVersion, expectedPersistencePath, nowMs: now() });
       if (!failures.length) {
         return {
@@ -217,13 +328,18 @@ export async function probe({
       }
       errors.push(`attempt ${attempt}: ${failures.join(",")}`);
     } catch (error) {
+      assessment = null;
       errors.push(`attempt ${attempt}: ${error.message}`);
     }
     if (attempt < attempts) await wait(retryDelayMs);
   }
 
   return {
+    ...(assessment || {}),
     ok: false,
+    profile,
+    ...(profile === "information" ? { incidentRequired: true, ...(!assessment ? { state: "operational-failure", operationalOk: false, goalComplete: false,
+      operationalFailures: [...errors], capabilityDegraded: [], reviewRequired: [] } : {}) } : {}),
     checkedAt: new Date(now()).toISOString(),
     baseUrl: base.origin,
     errors
@@ -232,11 +348,14 @@ export async function probe({
 
 async function main() {
   const result = await probe();
-  const prefix = result.ok ? "RADAR_HEALTH_OK" : "RADAR_HEALTH_FAILED";
+  const prefix = result.profile === "information" ? `RADAR_INFORMATION_${String(result.state || "operational-failure").toUpperCase().replaceAll("-", "_")}`
+    : result.ok ? "RADAR_HEALTH_OK" : "RADAR_HEALTH_FAILED";
   const output = `${prefix} ${JSON.stringify(result)}`;
   if (result.ok) console.log(output);
   else console.error(output);
-  process.exitCode = result.ok ? 0 : 1;
+  // In information mode a missing capability remains explicitly degraded, but
+  // is not falsely called an endpoint outage. Operational/review failures fail.
+  process.exitCode = result.profile === "information" ? (result.incidentRequired ? 1 : 0) : (result.ok ? 0 : 1);
 }
 
 const executedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
