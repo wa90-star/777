@@ -16,7 +16,7 @@ test("records a confirmed Telegram receipt and clears consecutive failures after
       return healthy ? response(200, { ok: true, result: { message_id: 7 } }) : response(503, { ok: false, description: "Service unavailable" });
     }
   });
-  assert.deepEqual(transport.getState(), { configured: true, lastAttemptAt: null, lastSuccessAt: null, lastError: null, failureCount: 0 });
+  assert.deepEqual(transport.getState(), { configured: true, lastAttemptAt: null, lastSuccessAt: null, lastError: null, failureCount: 0, targetType: null, targetVerifiedAt: null });
   await assert.rejects(transport.send("test message"), /HTTP 503: Service unavailable/);
   assert.equal(transport.getState().failureCount, 1);
   assert.equal(transport.getState().lastSuccessAt, null);
@@ -24,7 +24,7 @@ test("records a confirmed Telegram receipt and clears consecutive failures after
   clock += 1000;
   assert.deepEqual(await transport.send("test message"), { message_id: 7 });
   assert.deepEqual(transport.getState(), {
-    configured: true, lastAttemptAt: "2026-09-30T20:59:01.000Z", lastSuccessAt: "2026-09-30T20:59:01.000Z", lastError: null, failureCount: 0
+    configured: true, lastAttemptAt: "2026-09-30T20:59:01.000Z", lastSuccessAt: "2026-09-30T20:59:01.000Z", lastError: null, failureCount: 0, targetType: null, targetVerifiedAt: null
   });
   assert.equal(requests[1].url, `https://api.telegram.org/bot${token}/sendMessage`);
   assert.equal(requests[1].options.method, "POST");

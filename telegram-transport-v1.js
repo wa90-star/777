@@ -1,4 +1,5 @@
 const MAX_ERROR_LENGTH = 400;
+const { createHash } = require("node:crypto");
 
 function redactError(error, secrets = []) {
   let message = String(error?.message || error || "Unknown error");
@@ -12,10 +13,30 @@ function redactError(error, secrets = []) {
     .slice(0, MAX_ERROR_LENGTH);
 }
 
-function createTelegramTransport({ token, chatId, fetchImpl = globalThis.fetch, now = Date.now, timeoutMs = 8000 }) {
-  const state = { lastAttemptAt: null, lastSuccessAt: null, lastError: null, failureCount: 0 };
+function createTelegramTransport({ token, chatId, fetchImpl = globalThis.fetch, now = Date.now, timeoutMs = 8000, verifyPrivateTarget = false }) {
+  const state = { lastAttemptAt: null, lastSuccessAt: null, lastError: null, failureCount: 0, targetVerifiedAt: null, targetType: null };
   const configured = () => Boolean(token && chatId);
   const timestamp = () => new Date(now()).toISOString();
+  let verification = null;
+  async function verifyTarget() {
+    if (!configured()) throw new Error("Telegram not configured");
+    if (!/^[1-9]\d{0,15}$/.test(String(chatId)) || !Number.isSafeInteger(Number(chatId))) throw new Error("Telegram requires the existing positive numeric private-chat target");
+    if (state.targetVerifiedAt) return { verified: true, type: state.targetType };
+    if (verification) return verification;
+    verification = (async () => {
+      const response = await fetchImpl(`https://api.telegram.org/bot${token}/getChat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId }), signal: AbortSignal.timeout(timeoutMs)
+      });
+      const data = await response.json();
+      if (!response.ok || data?.ok !== true || data.result?.type !== "private" || String(data.result?.id) !== String(chatId)) throw new Error("Telegram private target verification failed");
+      state.targetVerifiedAt = timestamp(); state.targetType = "private";
+      return { verified: true, type: "private" };
+    })();
+    try { return await verification; }
+    catch (error) { throw new Error(redactError(error, [token, chatId])); }
+    finally { verification = null; }
+  }
 
   async function send(text) {
     state.lastAttemptAt = timestamp();
@@ -24,6 +45,7 @@ function createTelegramTransport({ token, chatId, fetchImpl = globalThis.fetch, 
     let timedOut = false;
     try {
       if (!configured()) throw new Error("Telegram not configured");
+      if (verifyPrivateTarget) await verifyTarget();
       const responseData = (async () => {
         const response = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: "POST",
@@ -46,8 +68,11 @@ function createTelegramTransport({ token, chatId, fetchImpl = globalThis.fetch, 
           if (validRetry) error.retryAfterMs = seconds * 1000;
           throw error;
         }
-        if (!Number.isInteger(data.result?.message_id)) {
+        if (!Number.isInteger(data.result?.message_id) || data.result.message_id <= 0) {
           throw new Error(`Telegram HTTP ${response.status}: missing sendMessage receipt`);
+        }
+        if (verifyPrivateTarget && (String(data.result?.chat?.id) !== String(chatId) || data.result?.chat?.type !== "private")) {
+          throw new Error("Telegram receipt does not match verified private target");
         }
         return data.result;
       })();
@@ -78,7 +103,9 @@ function createTelegramTransport({ token, chatId, fetchImpl = globalThis.fetch, 
     }
   }
 
-  return { send, configured, getState: () => ({ configured: configured(), ...state }) };
+  return { send, configured, verifyTarget,
+    identityFingerprint: () => configured() ? createHash("sha256").update(`${token}:${chatId}`).digest("hex") : null,
+    getState: () => ({ configured: configured(), ...state }) };
 }
 
 module.exports = { createTelegramTransport, redactError };

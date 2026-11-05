@@ -55,6 +55,13 @@ Endpoints:
 
 ### Energy Fuels notification ownership
 
+The optional primary-source information radar is documented in
+[`ops/DUAL-RADAR-FREE.md`](ops/DUAL-RADAR-FREE.md). It sends clearly labelled
+source/review notices through the existing Telegram destination. These are not
+Fokus analytical decisions or general-engine trade signals. The native Fokus
+automation is not connected by enabling this collector, and there is no global
+semantic deduplication across the native automation and these information notices.
+
 Energy Fuels Fokus is the sole notification owner for UUUU, EFR and EF2, including
 common exchange-qualified aliases. The general equity engine retains their market
 context but cannot send their Telegram signal or record it as a sent 777 trade

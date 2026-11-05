@@ -1,0 +1,10 @@
+import {writeSync} from 'node:fs';
+import {openStore} from '../ef-primary/store.mjs';
+const [directory,mode]=process.argv.slice(2);
+const freeze=()=>{writeSync(1,'READY\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);};
+const store=await openStore(directory,mode==='initial-schema'?{beforeSchemaCommit:freeze}:{});
+const source={id:'doe-ne',publisher:'us-doe',url:'https://www.energy.gov/feed',kind:'rss',scope:'crash fixture'};
+const item=n=>({url:`https://www.energy.gov/articles/${n}`,title:`Nuclear project ${n}`,summary:'Primary statement',publishedAt:'2026-11-05T12:00:00.000Z',publishedRaw:'2026-11-05T12:00:00.000Z'});
+store.applySnapshot(source,[item('b'),item('a')],'2026-11-05T12:15:00.000Z',mode==='before-commit'?{beforeCommit:freeze}:{});
+if(mode==='after-commit')freeze();
+store.close();

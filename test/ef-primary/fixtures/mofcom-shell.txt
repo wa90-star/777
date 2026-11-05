@@ -1,0 +1,1 @@
+<script url="/api-gateway/jpaas-publish-server/front/page/build/unit" queryData="{'parseType':'bulidstatic','webId':'synthetic-web','tplSetId':'synthetic-template','pageType':'column','tagId':'list','editType':'null','pageId':'synthetic-page'}"></script>

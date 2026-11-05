@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "*.js"
+      - "ef-primary/**"
       - "scripts/**"
       - "public/**"
       - "ops/**"
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - "*.js"
+      - "ef-primary/**"
       - "scripts/**"
       - "public/**"
       - "test/**"
@@ -53,7 +55,9 @@ jobs:
         run: npm test
 
       - name: Syntax-check isolated acceptance script
-        run: node --check ops/container-smoke.mjs
+        run: |
+          node --check ops/container-smoke.mjs
+          node --check ops/container-memory.mjs
 
   verify-platform:
     needs: test
@@ -104,6 +108,14 @@ jobs:
           actual_platform="$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')"
           test "$actual_platform" = "$EXPECTED_PLATFORM"
           node ops/container-smoke.mjs "$IMAGE"
+
+      - name: Measure bounded native Linux runtime before main publication
+        # PRs run this once in verify-free-runtime; never benchmark ARM under
+        # emulation or call this workflow a production monitor.
+        if: matrix.architecture == 'amd64' && github.event_name != 'pull_request'
+        env:
+          IMAGE: radar-platform-check:${{ github.sha }}-${{ matrix.architecture }}
+        run: node ops/container-memory.mjs "$IMAGE"
 
   publish:
     # Only trusted main builds can authenticate or publish; both real

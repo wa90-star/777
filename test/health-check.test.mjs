@@ -81,6 +81,18 @@ test("accepts a live, durable and authenticated deployment", () => {
   assert.deepEqual(assessHealth(status, oil), []);
 });
 
+test("enabled EF collection must have fresh complete sources and a working sender", () => {
+  const { status, oil } = healthyPayloads();
+  const fresh = new Date().toISOString();
+  status.energyFuelsPrimary = { enabled: true, intervalMinutes: 10, lastCollectionAt: fresh,
+    status: { sources: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`source-${i}`, { status: "OK", lastSuccessAt: fresh, warnings: [] }])) } };
+  assert.deepEqual(assessHealth(status, oil), []);
+  status.energyFuelsPrimary.deliveryPaused = true;
+  status.energyFuelsPrimary.status.sources["source-2"].warnings = ["coverage gap"];
+  status.energyFuelsPrimary.status.sources["source-3"].lastSuccessAt = "2020-01-01T00:00:00Z";
+  assert.deepEqual(assessHealth(status, oil), ["ef-primary-delivery-paused", "ef-primary-source-degraded:source-2", "ef-primary-source-degraded:source-3"]);
+});
+
 test("handoff persistence errors cannot be reported as healthy", () => {
   const { status, oil } = healthyPayloads();
   status.energyFuelsHandoff = { pendingCount: 1, lastError: "storage failed", lastEquityError: "retry required" };
