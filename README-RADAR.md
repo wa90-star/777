@@ -53,6 +53,54 @@ Endpoints:
 - `/api/structural`: raw structural discoveries, verified clusters, source health and verification state
 - `/api/equities`: focused equity watchlist, current structural hypotheses, market confirmation and execution-gate state
 
+### Energy Fuels notification ownership
+
+Energy Fuels Fokus is the sole notification owner for UUUU, EFR and EF2, including
+common exchange-qualified aliases. The general equity engine retains their market
+context but cannot send their Telegram signal or record it as a sent 777 trade
+alert. This restriction is enforced at dispatch and cannot be bypassed by changing
+the watchlist or by supplying a routing flag on a candidate. Other symbols retain
+the existing structural, market, execution and duplicate checks.
+Policy notifications are delegated only for an explicit EF single-stock subject
+or a clear company-action headline starting with Energy Fuels/UUUU. Another
+instrument's directional bias or impacted symbol keeps the general alert enabled.
+A company name in article text, an affected-company list or an ambiguous headline
+is relevance, not exclusive ownership. Broad uranium, rare-earth, oil and rate
+news therefore remains eligible for its general-market purpose. The outbox also
+checks pending entries restored after restart and still performs market rechecks.
+This conservative rule is not semantic classification or global deduplication.
+
+`GET /api/energy-fuels-context` supplies the existing persisted critical-minerals
+discoveries, confirmed secondary-source clusters, explicit EF policy news and market context
+for the Fokus owner to read. Raw discoveries remain visible without quotes or a
+directional hypothesis. Existing collector IDs and provenance are preserved; the
+endpoint does not claim primary-source verification or global event deduplication.
+The discovery lists retain their existing maximum age (72 hours for structural
+discoveries, 14 days for policy display) and global row limits (80 structural
+discoveries, 30 structural clusters, 30 policy items); they can disappear earlier.
+Separately, `handoff.pending` contains deferred EF company notifications and
+qualified EF equity signals, durably recorded **before** suppression in
+`RADAR_DATA_DIR/energy-fuels-handoff.jsonl`. This append-only local file preserves
+immutable namespaced event IDs and original evidence across restarts without
+automatic deletion. Equity aliases share the structural-event/direction ID.
+It must be included in the full data-volume backup; it is not an external backup.
+Only one radar process may write this data directory.
+
+The write must succeed and be flushed to disk before suppression. Linux also
+flushes the directory entry; the local Windows Node API cannot do that directory
+flush. Corrupt/incomplete records stop further handoff writes without overwriting
+evidence. Policy failures stay pending for the existing bounded retries, then
+remain failed for review; equity failures remain visible and retry on subsequent
+qualifying scans. `/api/status` and the health check report storage errors. No
+fallback alert is sent via the competing general channel. There is no public
+write/acknowledgement endpoint and no automatic removal after a read.
+`ownerReadConfirmed` and `deliveryConfirmed` remain false until an actual consumer
+and acknowledgement contract are implemented. Merely enabling the general radar
+does not connect the native Fokus automation to this endpoint.
+
+`/api/status` and `/api/equities` expose the same ownership contract. No additional
+subscription, external service, signal threshold or automatic trading is involved.
+
 ## Kimi research layer
 
 Kimi K3 is an external research layer, not a market-data provider or alert engine. Research travels through the private `aktienradar-control` workflow, receives a separate human/Codex approval bound to the packet SHA-256, and is then imported with `npm run import:kimi`. The runtime accepts only `off` or `shadow`; imported candidates have no production or Telegram influence.

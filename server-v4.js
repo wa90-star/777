@@ -14,8 +14,12 @@ const createEquityStructuralEngine = require("./equity-structural-v1");
 const { publicOilScope } = require("./data-scope-v1");
 const { createTelegramTransport, redactError } = require("./telegram-transport-v1");
 const runDeferredMarketRecheck = require("./market-recheck-v1");
+const { energyFuelsPolicy, energyFuelsContext, ENERGY_FUELS_CONTEXT_PATH } = require("./signal-ownership-v1");
+const createEnergyFuelsHandoff = require("./energy-fuels-handoff-v1");
+const VERSION = require("./package.json").version;
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.PORT || process.env.RADAR_PORT || 3000);
+const BIND_ADDRESS = process.env.RADAR_BIND_ADDRESS || "0.0.0.0";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const telegramTransport = createTelegramTransport({ token: TELEGRAM_BOT_TOKEN, chatId: TELEGRAM_CHAT_ID });
@@ -34,6 +38,7 @@ let structural = null;
 let equityStructural = null;
 const kimiResearch = createResearchStore();
 kimiResearch.load();
+const energyFuelsHandoff = createEnergyFuelsHandoff();
 
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -216,6 +221,7 @@ function queueMarketRecheck(items, source, refreshContext = false) {
 }
 
 const catalysts = createCatalystEngine({
+  energyFuelsHandoff,
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   onAlert: recordAlert,
@@ -287,6 +293,7 @@ market = createMarketEngine({
 });
 
 equityStructural = createEquityStructuralEngine({
+  energyFuelsHandoff,
   sendMessage: sendTelegramMessage,
   telegramConfigured,
   getStructuralState: () => structural.getState(),
@@ -307,12 +314,16 @@ function statusPayload() {
   const ecbState = ecb.getState();
   const structuralState = structural.getState();
   const equityState = equityStructural.getState();
+  const handoffState = energyFuelsHandoff.getState();
   const journalState = journal.getState();
   const oilState = oilMonitor.getState();
   const oilScope = publicOilScope(oilState);
   return {
     system: "777",
-    version: "5.2.1",
+    version: VERSION,
+    energyFuelsRouting: energyFuelsPolicy(),
+    energyFuelsHandoff: { pendingCount: handoffState.pendingCount,
+      lastError: handoffState.lastError, lastEquityError: equityState.lastHandoffError },
     status: "online",
     focus: "commodity-first + focused structural-equity confirmation",
     publicApiMode: "read-only",
@@ -461,6 +472,9 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/ecb") return sendJson(res, 200, ecb.getState());
     if (requestUrl.pathname === "/api/structural") return sendJson(res, 200, structural.getState());
     if (requestUrl.pathname === "/api/equities") return sendJson(res, 200, equityStructural.getState());
+    if (requestUrl.pathname === ENERGY_FUELS_CONTEXT_PATH) return sendJson(res, 200,
+      { ...energyFuelsContext(structural.getState(), equityStructural.getState(), catalysts.getState()),
+        handoff: energyFuelsHandoff.getState() });
     if (requestUrl.pathname === "/api/journal") return sendJson(res, 200, journal.getState());
     if (requestUrl.pathname === "/api/oil-monitor") return sendJson(res, 200, oilMonitor.getState());
 
@@ -490,8 +504,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`777 v5.3.0 running on port ${PORT}`);
+server.listen(PORT, BIND_ADDRESS, () => {
+  console.log(`777 v${VERSION} running on ${BIND_ADDRESS}:${server.address().port}`);
   console.log(`777 focus: commodity-first + structural-equity watchlist ${equityStructural.getState().watchlist.join(",")} + independent evidence gates + v5 execution quality; Telegram ${telegramConfigured() ? "configured" : "offline"}`);
   console.log(`777 market duplicate suppression: ${MARKET_REPEAT_SUPPRESS_MS / 3600000}h unless confirmations/types or directional move materially escalates`);
   console.log(`777 stale market alert block: quotes/trades older than ${MARKET_DATA_MAX_AGE_MS / 60000} min`);

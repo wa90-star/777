@@ -1,7 +1,7 @@
 const { executionQuality } = require("./decision-engine-v5");
 const { _test: structuralTest } = require("./structural-intelligence-v1");
+const { signalOwnership, energyFuelsPolicy } = require("./signal-ownership-v1");
 
-const WATCHLIST = structuralTest.parseWatchlist();
 const SCAN_INTERVAL_MS = 10 * 60 * 1000;
 const STRUCTURAL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -78,8 +78,11 @@ function createEquityStructuralEngine({
   getStructuralState = () => ({ verified: [] }),
   recentSignalAlert = () => null,
   onSignalAlert,
-  onAlert
+  onAlert,
+  energyFuelsHandoff,
+  watchlist = structuralTest.parseWatchlist()
 }) {
+  const WATCHLIST = [...watchlist];
   const alpacaKey = process.env.APCA_API_KEY_ID;
   const alpacaSecret = process.env.APCA_API_SECRET_KEY;
   const twelveKey = process.env.TWELVE;
@@ -92,6 +95,7 @@ function createEquityStructuralEngine({
     signals: [],
     lastScanAt: null,
     lastError: null,
+    lastHandoffError: null,
     marketWindowOpen: false,
     source: "alpaca-iex"
   };
@@ -226,6 +230,7 @@ function createEquityStructuralEngine({
       marketTime: latestTrade?.t ?? latestTrade?.timestamp ?? daily.t ?? daily.timestamp ?? null,
       quoteTime,
       direction,
+      alertRouting: signalOwnership(symbol),
       structuralConfirmed: Boolean(structural),
       marketConfirmed,
       score,
@@ -272,6 +277,9 @@ function createEquityStructuralEngine({
     if (!signal.structuralConfirmed || !signal.marketConfirmed) return false;
     if (!signal.executionQuality?.plausible) return false;
     if (signal.direction !== "LONG" && signal.direction !== "SHORT") return false;
+    // Qualifying EF observations go to durable handoff even after a historical
+    // 777 alert. The handoff store deduplicates the actual event across aliases.
+    if (!signalOwnership(signal.symbol).directAlertAllowed) return true;
     const prior = priorAlertFor(signal);
     if (!prior) return true;
     if (Number(signal.structural?.independentSourceCount || 0) > Number(prior.independentSourceCount || 0)) return true;
@@ -303,9 +311,19 @@ function createEquityStructuralEngine({
   }
 
   async function alertSignals(signals) {
-    if (!telegramConfigured()) return;
+    let handoffAttempted = false;
+    let handoffError = null;
     for (const signal of signals.filter(shouldAlert).sort((a, b) => b.score - a.score)) {
       try {
+        // Enforce ownership here, never trust caller-provided routing flags.
+        if (!signalOwnership(signal.symbol).directAlertAllowed) {
+          handoffAttempted = true;
+          if (!energyFuelsHandoff) throw new Error("Energy Fuels handoff is not configured");
+          const receipt = energyFuelsHandoff.recordEquity(signal);
+          if (receipt?.persisted !== true) throw new Error("Energy Fuels handoff was not persisted");
+          continue;
+        }
+        if (!telegramConfigured()) continue;
         const result = await sendMessage(alertText(signal));
         if (result?.suppressed) continue;
         const sentAt = Date.now();
@@ -331,9 +349,11 @@ function createEquityStructuralEngine({
           }
         });
       } catch (error) {
+        if (!signalOwnership(signal.symbol).directAlertAllowed) handoffError = error.message;
         console.error("777 structural equity alert failed:", error.message);
       }
     }
+    if (handoffAttempted) state.lastHandoffError = handoffError;
   }
 
   async function run(force = false) {
@@ -379,6 +399,7 @@ function createEquityStructuralEngine({
       structuralMaxAgeHours: STRUCTURAL_MAX_AGE_MS / 3600000,
       alertCooldownHours: ALERT_COOLDOWN_MS / 3600000,
       alpacaConfigured: alpacaConfigured(),
+      energyFuelsRouting: energyFuelsPolicy(),
       evidenceRule: "verified structural event + same-direction market confirmation + execution-quality gate"
     })
   };

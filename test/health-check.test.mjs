@@ -81,6 +81,15 @@ test("accepts a live, durable and authenticated deployment", () => {
   assert.deepEqual(assessHealth(status, oil), []);
 });
 
+test("handoff persistence errors cannot be reported as healthy", () => {
+  const { status, oil } = healthyPayloads();
+  status.energyFuelsHandoff = { pendingCount: 1, lastError: "storage failed", lastEquityError: "retry required" };
+  assert.deepEqual(assessHealth(status, oil), [
+    "energy-fuels-handoff-error:lastError:storage failed",
+    "energy-fuels-handoff-error:lastEquityError:retry required"
+  ]);
+});
+
 test("reports independent persistence and provider failures", () => {
   const { status, oil } = healthyPayloads();
   status.journalPersistence = "fallback:/tmp/777-radar";

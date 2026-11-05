@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const createDeliveryOutbox = require("./delivery-outbox-v1");
+const { isEnergyFuelsSpecific } = require("./signal-ownership-v1");
 
 const KEYWORDS = [
   "oil", "crude", "petroleum", "natural gas", "lng", "pipeline",
@@ -237,7 +238,7 @@ function classify(item, baseScore) {
   };
 }
 
-function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, onTrumpPost }) {
+function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, onTrumpPost, energyFuelsHandoff }) {
   const seen = new Map();
   const primed = new Set();
   const preferredDir = process.env.RADAR_DATA_DIR || "/data";
@@ -270,7 +271,15 @@ function createCatalystEngine({ sendMessage, telegramConfigured, onAlert, onFres
       ...(onFreshRelevant ? { marketRecheck: { batch: true, deliver: (items) => onFreshRelevant(items) } } : {}),
       telegram: {
         enabled: telegramConfigured,
-        deliver: ([item]) => sendMessage(formatAlert(item)),
+        // Apply at delivery too, including pending entries restored from disk.
+        // Keep market rechecks and persisted evidence; Fokus owns EF messages.
+        deliver: ([item]) => {
+          if (!isEnergyFuelsSpecific(item)) return sendMessage(formatAlert(item));
+          if (!energyFuelsHandoff) throw new Error("Energy Fuels handoff is not configured");
+          const receipt = energyFuelsHandoff.recordPolicy(item);
+          if (receipt?.persisted !== true) throw new Error("Energy Fuels handoff was not persisted");
+          return { suppressed: true, reason: "energy-fuels-fokus-owner", handoffEventId: receipt.eventId };
+        },
         onDelivered: () => onAlert?.(new Date().toISOString())
       }
     }
