@@ -103,13 +103,31 @@ export class SqliteStore {
  }
  status(){
   const counts=this.db.prepare("SELECT (SELECT count(*) FROM events) totalEvents,(SELECT count(*) FROM revisions) totalRevisions,(SELECT count(*) FROM outbox WHERE status='pending') pendingNotices,(SELECT count(*) FROM outbox WHERE status='pending' AND json_extract(data,'$.classification.queue')='REVIEW') pendingActionable,(SELECT count(*) FROM outbox WHERE status='pending' AND json_extract(data,'$.classification.queue')='UNCLASSIFIED_REVIEW') pendingUnclassified,(SELECT count(*) FROM outbox WHERE status='delivered') deliveredNotices,(SELECT count(*) FROM risk_reviews) riskReviews").get();
+  // Historical source-delivery evidence survives a process restart. Project only
+  // the time; neither private risk-review records nor receipt IDs leave this API.
+  const safeReceipt="CASE WHEN json_valid(receipt) THEN receipt ELSE '{}' END";
+  const received=this.db.prepare(`SELECT substr(json_extract(${safeReceipt},'$.deliveredAt'),1,80) at,
+    json_type(${safeReceipt},'$.messageId') idType,substr(json_extract(${safeReceipt},'$.messageId'),1,24) messageId
+    FROM outbox WHERE status='delivered' AND kind IN ('SOURCE_NEW','SOURCE_UPDATED')
+      AND json_extract(${safeReceipt},'$.provider')='telegram'
+    ORDER BY julianday(json_extract(${safeReceipt},'$.deliveredAt')) DESC`).iterate();
+  let lastSourceTelegramReceiptAt=null;
+  const futureLimit=Date.now()+5*60000;
+  for(const row of received){
+   if(row.idType!=='text'||!/^[1-9][0-9]{0,15}$/.test(row.messageId||'')||!Number.isSafeInteger(Number(row.messageId)))continue;
+   if(typeof row.at!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(row.at))continue;
+   const time=Date.parse(row.at);if(!Number.isFinite(time)||time>futureLimit)continue;
+   const normalized=new Date(time).toISOString();
+   if(row.at!==normalized&&row.at!==normalized.replace('.000Z','Z'))continue;
+   lastSourceTelegramReceiptAt=normalized;break;
+  }
   const sources={};
   for(const row of this.db.prepare('SELECT id,data FROM sources ORDER BY id LIMIT 100').iterate()){
    const data=parse(row.data);delete data.windowIds; // Large baseline identity sets stay on disk.
    sources[row.id]=data;
   }
   const pageCount=Number(this.db.prepare('PRAGMA page_count').get().page_count);
-  return {schema:SCHEMA,initialized:!!this.getMeta('initialized'),lastRun:this.getMeta('lastRun'),sources,...counts,storage:{engine:'sqlite',databaseBytes:pageCount*4096,maxDatabaseBytes:MAX_DATABASE_PAGES*4096,historyExpiry:false},externalSenderConfigured:false};
+  return {schema:SCHEMA,initialized:!!this.getMeta('initialized'),lastRun:this.getMeta('lastRun'),sources,...counts,lastSourceTelegramReceiptAt,storage:{engine:'sqlite',databaseBytes:pageCount*4096,maxDatabaseBytes:MAX_DATABASE_PAGES*4096,historyExpiry:false},externalSenderConfigured:false};
  }
  pending({limit=50,afterSequence=0,actionableOnly=false}={}){
   if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isSafeInteger(afterSequence)||afterSequence<0)throw new Error('Pending query requires limit 1..100 and nonnegative sequence');

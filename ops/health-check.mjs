@@ -234,9 +234,11 @@ export function assessInformationHealth(status, oil, options = {}) {
   const ordinaryReceipts = Object.values(channels).map(channel => channel?.lastReceiptAt)
     .filter(value => Number.isFinite(Date.parse(value || "")) && Date.parse(value) <= nowMs + 5 * 60000);
   const informationReceiptObserved = ordinaryReceipts.length > 0;
-  const efReceiptObserved = Number(ef?.status?.deliveredNotices) > 0 && Number.isFinite(Date.parse(ef?.lastDeliveryAt || ""))
-    && Date.parse(ef.lastDeliveryAt) <= nowMs + 5 * 60000;
-  if (efReceiptObserved) ordinaryReceipts.push(ef.lastDeliveryAt);
+  const efStoredReceiptAt = ef?.status?.lastSourceTelegramReceiptAt;
+  const efStoredReceiptMs = typeof efStoredReceiptAt === "string" ? Date.parse(efStoredReceiptAt) : NaN;
+  const efReceiptObserved = Number(ef?.status?.deliveredNotices) > 0 && Number.isFinite(efStoredReceiptMs)
+    && new Date(efStoredReceiptMs).toISOString() === efStoredReceiptAt && efStoredReceiptMs <= nowMs + 5 * 60000;
+  if (efReceiptObserved) ordinaryReceipts.push(efStoredReceiptAt);
   const probe = status?.deliveryProbe;
   const connectionProbeObserved = probe?.status === "CONFIRMED" && Number.isInteger(probe.messageId) && probe.messageId > 0
     && Number.isFinite(Date.parse(probe.providerAcceptedAt || "")) && Date.parse(probe.providerAcceptedAt) <= nowMs + 5 * 60000;

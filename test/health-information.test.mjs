@@ -47,10 +47,26 @@ test("information operation works but missing trading data is explicitly degrade
 test("a connection probe cannot masquerade as an ordinary EF or information receipt", () => {
   const pair = fixtures(); pair.status.energyFuelsPrimary.status.deliveredNotices = 1;
   assert.equal(assess(pair).deliveryEvidence.ordinaryReceiptObserved, false);
-  pair.status.energyFuelsPrimary.lastDeliveryAt = FRESH;
+  pair.status.energyFuelsPrimary.lastDeliveryAt = null;
+  pair.status.energyFuelsPrimary.status.lastSourceTelegramReceiptAt = FRESH;
   const evidence = assess(pair).deliveryEvidence;
   assert.equal(evidence.efReceiptObserved, true); assert.equal(evidence.informationReceiptObserved, false);
   assert.equal(evidence.deviceReadConfirmed, false);
+});
+test("EF historical receipt survives runtime reset; probe, ephemeral time and malformed stored evidence cannot replace it", () => {
+  const pair = fixtures(), ef = pair.status.energyFuelsPrimary;
+  ef.status.deliveredNotices = 1; ef.lastDeliveryAt = FRESH;
+  assert.equal(assess(pair).deliveryEvidence.efReceiptObserved, false);
+  for (const invalid of [null, "invalid", "2026-02-30T12:00:00.000Z", new Date(NOW + 6 * 60000).toISOString(), "2026-11-05"]){
+    ef.status.lastSourceTelegramReceiptAt = invalid;
+    assert.equal(assess(pair).deliveryEvidence.efReceiptObserved, false);
+  }
+  const historical = new Date(NOW - 86400000).toISOString();
+  ef.lastDeliveryAt = null; ef.status.lastSourceTelegramReceiptAt = historical;
+  const result = assess(pair);
+  assert.equal(result.deliveryEvidence.efReceiptObserved, true);
+  assert.equal(result.deliveryEvidence.latestStoredOrdinaryReceiptAt, historical);
+  assert.equal(result.goalComplete, false);
 });
 test("legacy expired Telegram channels remain review-required, mixed quote failures are not messages", () => {
   const pair = fixtures();
