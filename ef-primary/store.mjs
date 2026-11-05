@@ -106,10 +106,12 @@ export class SqliteStore {
   // Historical source-delivery evidence survives a process restart. Project only
   // the time; neither private risk-review records nor receipt IDs leave this API.
   const safeReceipt="CASE WHEN json_valid(receipt) THEN receipt ELSE '{}' END";
-  const received=this.db.prepare(`SELECT substr(json_extract(${safeReceipt},'$.deliveredAt'),1,80) at,
-    json_type(${safeReceipt},'$.messageId') idType,substr(json_extract(${safeReceipt},'$.messageId'),1,24) messageId
+  const received=this.db.prepare(`SELECT json_extract(${safeReceipt},'$.deliveredAt') at,
+    json_type(${safeReceipt},'$.messageId') idType,json_extract(${safeReceipt},'$.messageId') messageId
     FROM outbox WHERE status='delivered' AND kind IN ('SOURCE_NEW','SOURCE_UPDATED')
       AND json_extract(${safeReceipt},'$.provider')='telegram'
+      AND length(CAST(json_extract(${safeReceipt},'$.deliveredAt') AS BLOB))<=80
+      AND length(CAST(json_extract(${safeReceipt},'$.messageId') AS BLOB))<=24
     ORDER BY julianday(json_extract(${safeReceipt},'$.deliveredAt')) DESC`).iterate();
   let lastSourceTelegramReceiptAt=null;
   const futureLimit=Date.now()+5*60000;

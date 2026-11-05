@@ -44,6 +44,8 @@ test('invalid, future, pending or malformed receipt cannot manufacture source-de
  try{
   const receipts=[null,'not-json',JSON.stringify({provider:'telegram',messageId:'0',deliveredAt:LATER}),
    JSON.stringify({provider:'telegram',messageId:12,deliveredAt:LATER}),JSON.stringify({provider:'telegram',messageId:'9007199254740992',deliveredAt:LATER}),
+   JSON.stringify({provider:'telegram',messageId:'12\u0000invalid',deliveredAt:LATER}),
+   JSON.stringify({provider:'telegram',messageId:'12',deliveredAt:LATER+'\u0000invalid'}),
    JSON.stringify({provider:'telegram',messageId:'12',deliveredAt:'2026-02-30T12:00:00.000Z'}),
    JSON.stringify({provider:'telegram',messageId:'12',deliveredAt:new Date(NOW+86400000).toISOString()}),
    JSON.stringify({provider:'telegram',messageId:'12',deliveredAt:'2026-11-05'})];
