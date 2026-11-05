@@ -6,8 +6,8 @@ const path = require("node:path");
 const createCatalyst = require("../catalyst-v4");
 const createEia = require("../eia-v4");
 
-function feed(ids, kind) {
-  return `<rss><channel>${ids.map((id) => `<item><title>${kind === "EIA" ? "Weekly petroleum status report: crude oil inventories decreased" : "Emergency oil sanctions on Iran"} ${id}</title><link>https://example.test/${kind}/${id}</link><pubDate>${new Date().toUTCString()}</pubDate></item>`).join("")}</channel></rss>`;
+function feed(ids, kind, publishedAt) {
+  return `<rss><channel>${ids.map((id) => `<item><title>${kind === "EIA" ? "Weekly petroleum status report: crude oil inventories decreased" : "Emergency oil sanctions on Iran"} ${id}</title><link>https://example.test/${kind}/${id}</link><pubDate>${publishedAt}</pubDate></item>`).join("")}</channel></rss>`;
 }
 
 for (const [kind, create, scan, filename] of [
@@ -24,9 +24,10 @@ for (const [kind, create, scan, filename] of [
       fs.rmSync(dir, { recursive: true, force: true });
     });
     let time = Date.now(), ids = ["baseline"], attempts = 0, observed = 0;
+    const publishedAt = new Date(time).toUTCString();
     const messages = [], callbackIds = [];
     t.mock.method(Date, "now", () => time);
-    t.mock.method(global, "fetch", async () => new Response(feed(ids, kind), { status: 200 }));
+    t.mock.method(global, "fetch", async () => new Response(feed(ids, kind, publishedAt), { status: 200 }));
     const options = {
       telegramConfigured: () => true,
       sendMessage: async (text) => {

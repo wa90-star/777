@@ -128,6 +128,7 @@ function classify(raw) {
 
 function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRelevant, energyFuelsHandoff, informationMode = process.env.RADAR_GENERAL_INFO_MODE === "true" }) {
   const seen = new Map();
+  const legacyReleaseBaselines = new Set();
   const preferredDir = process.env.RADAR_DATA_DIR || "/data";
   let storageFile = null;
   let persistenceMode = "memory-only";
@@ -177,7 +178,9 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     if (!storageFile || (informationMode && !persistenceMode.startsWith("persistent:"))) return false;
     try {
       writeDurableState(storageFile, {
-        version: 2,
+        version: 3,
+        releaseIdentityVersion: 1,
+        legacyReleaseBaselines: [...legacyReleaseBaselines],
         savedAt: new Date().toISOString(),
         seen: [...seen.entries()],
         primed,
@@ -200,6 +203,22 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
         if (!Array.isArray(pair) || pair.length !== 2) continue;
         const ts = Number(pair[1]);
         if (Number.isFinite(ts) && ts >= cutoff) seen.set(pair[0], ts);
+      }
+      // Older snapshots knew URLs, not editions. Recover publication identities
+      // from saved evidence first; an otherwise unknown legacy URL establishes
+      // one quiet edition baseline when it next appears. Persist unresolved URLs
+      // across partial feed failures and restarts, without altering any receipt.
+      const legacy = parsed.releaseIdentityVersion === 1
+        ? (Array.isArray(parsed.legacyReleaseBaselines) ? parsed.legacyReleaseBaselines : [])
+        : (parsed.seen || []).filter(Array.isArray).map(pair => pair[0]);
+      for (const id of legacy) if (typeof id === "string" && id.startsWith("eia:") && !id.includes("|release:")) legacyReleaseBaselines.add(id);
+      const evidence = [...(Array.isArray(parsed.items) ? parsed.items : []), ...(Array.isArray(parsed.deliveryOutbox) ? parsed.deliveryOutbox.map(entry => entry?.item) : [])];
+      for (const item of evidence) {
+        if (!item?.url) continue;
+        const identity = releaseIdentity(item);
+        if (identity.id === identity.baseId) continue;
+        seen.set(identity.id, Date.now());
+        legacyReleaseBaselines.delete(identity.baseId);
       }
       primed = Boolean(parsed.primed);
       state.items = (Array.isArray(parsed.items) ? parsed.items : [])
@@ -235,6 +254,15 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     return `https://www.eia.gov${url.startsWith("/") ? "" : "/"}${url}`;
   }
 
+  function releaseIdentity(raw) {
+    const url = normalizeUrl(raw.url);
+    const baseId = `eia:${url || raw.title}`;
+    const publicationTime = raw.publishedAt ? safeTime(raw.publishedAt) : 0;
+    // Equivalent RSS timezone spellings identify the same edition. Missing or
+    // invalid dates retain URL deduplication; no publication time is invented.
+    return { url, baseId, id: publicationTime ? `${baseId}|release:${new Date(publicationTime).toISOString()}` : baseId };
+  }
+
   function recent(raw) {
     if (!raw.publishedAt) return true;
     const t = safeTime(raw.publishedAt);
@@ -258,9 +286,17 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     const merged = new Map();
     for (const result of successful) {
       for (const raw of rssItems(result.value)) {
-        const url = normalizeUrl(raw.url);
-        const id = `eia:${url || raw.title}`;
-        if (!merged.has(id)) merged.set(id, { ...raw, id, url });
+        // Do not mark a future-dated edition as seen before it is publishable.
+        if (safeTime(raw.publishedAt) > now + 5 * 60000) continue;
+        const identity = releaseIdentity(raw);
+        if (!merged.has(identity.id)) merged.set(identity.id, { ...raw, ...identity });
+      }
+    }
+
+    for (const raw of merged.values()) {
+      if (legacyReleaseBaselines.has(raw.baseId)) {
+        seen.set(raw.id, now);
+        if (raw.id !== raw.baseId) legacyReleaseBaselines.delete(raw.baseId);
       }
     }
 
@@ -270,7 +306,7 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
       .filter(Boolean);
 
     if (!primed) {
-      for (const raw of merged.values()) seen.set(raw.id, now);
+      for (const raw of merged.values()) { seen.set(raw.id, now); seen.set(raw.baseId, now); }
       primed = true;
       state.items = normalized.map((x) => ({ ...x, detectedAt: state.lastScanAt, baseline: true })).slice(0, 30);
       persist();
@@ -281,7 +317,9 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
     const fresh = normalized
       .filter((item) => !seen.has(item.id))
       .map((item) => ({ ...item, detectedAt: state.lastScanAt, baseline: false }));
-    for (const raw of merged.values()) seen.set(raw.id, now);
+    // Keep URL aliases as well so rolling back to the previous engine does not
+    // turn all current editions into new events.
+    for (const raw of merged.values()) { seen.set(raw.id, now); seen.set(raw.baseId, now); }
 
     const cutoff = now - SEEN_MAX_AGE_MS;
     for (const [key, ts] of seen.entries()) if (ts < cutoff) seen.delete(key);
@@ -332,7 +370,9 @@ function createEiaEngine({ sendMessage, telegramConfigured, onAlert, onFreshRele
       notificationMode: informationMode ? "source-information-only" : "legacy-catalyst",
       informationNoticesExecutionEligible: false,
       informationDeliveryStatus: informationMode ? informationDeliveryStatus(outbox) : null,
-      pollingMinutes: POLL_MS / 60000
+      pollingMinutes: POLL_MS / 60000,
+      releaseIdentityVersion: 1,
+      pendingLegacyReleaseBaselines: legacyReleaseBaselines.size
     })
   };
 }

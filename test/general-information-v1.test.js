@@ -21,11 +21,12 @@ function setup(t, title, origin) {
   delete process.env.APCA_API_KEY_ID; delete process.env.APCA_API_SECRET_KEY; delete process.env.TWELVE;
   t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } fs.rmSync(directory, { recursive: true, force: true }); });
   let ids = ["baseline"], timestamp = Date.now();
+  const publishedAt = new Date(timestamp).toUTCString();
   const urls = [];
   t.mock.method(Date, "now", () => timestamp);
   t.mock.method(global, "fetch", async url => {
     urls.push(String(url));
-    return new Response(`<rss><channel>${ids.map(id => `<item><title>${title} ${id}</title><link>${origin}${id}</link><pubDate>${new Date(timestamp).toUTCString()}</pubDate></item>`).join("")}</channel></rss>`);
+    return new Response(`<rss><channel>${ids.map(id => `<item><title>${title} ${id}</title><link>${origin}${id}</link><pubDate>${publishedAt}</pubDate></item>`).join("")}</channel></rss>`);
   });
   return { directory, urls, fresh() { ids = ["fresh", "baseline"]; }, advance(ms) { timestamp += ms; } };
 }
